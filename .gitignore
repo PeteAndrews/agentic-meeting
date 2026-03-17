@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+ENV/
+
+# Backend data (keep example token registry committed)
+backend/data/events/
+backend/data/transcripts/
+backend/data/session_configs/
+backend/data/token_registry.jsonl
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+

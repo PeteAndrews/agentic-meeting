@@ -1,0 +1,5 @@
+{"studyToken":"demo-hh-A","participantId":"p-demo-A","role":"moderator","condition":"HH","roomName":"am-demo-hh","displayName":"Moderator (A)","createdAt":"2026-03-17T00:00:00Z"}
+{"studyToken":"demo-hh-B","participantId":"p-demo-B","role":"active","condition":"HH","roomName":"am-demo-hh","displayName":"Participant (B)","createdAt":"2026-03-17T00:00:00Z"}
+{"studyToken":"demo-hh-C","participantId":"p-demo-C","role":"silent","condition":"HH","roomName":"am-demo-hh","displayName":"Silent (C)","createdAt":"2026-03-17T00:00:00Z"}
+{"studyToken":"demo-ha-A","participantId":"p-demo-A2","role":"moderator","condition":"HA","roomName":"am-demo-ha","displayName":"Moderator (A)","createdAt":"2026-03-17T00:00:00Z"}
+{"studyToken":"demo-ha-B","participantId":"p-demo-B2","role":"active","condition":"HA","roomName":"am-demo-ha","displayName":"Participant (B)","createdAt":"2026-03-17T00:00:00Z"}
