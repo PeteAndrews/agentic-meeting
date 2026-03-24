@@ -34,7 +34,12 @@ class SessionConfig(BaseModel):
     roomName: str
     condition: Condition
     agenda: list[str] = []
+    sttEnabled: bool = True
     sttRoles: list[Role] = [Role.MODERATOR, Role.ACTIVE]
+    sttLanguage: str = Field(default="en-US", min_length=2, max_length=32)
+    sttSendInterim: bool = False
+    # Consent-friendly default: require explicit user action to enable mic/STT.
+    sttRequireUserClick: bool = True
     # In HH, C is present but should be muted and silent.
     hhSilentRole: Role = Role.SILENT
     # Audio-first agent actions: speak/ask_clarification/wait (no chat UI).
@@ -63,6 +68,7 @@ class TranscriptSegmentRequest(BaseModel):
     condition: Condition
     startMs: int = Field(ge=0)
     endMs: int = Field(ge=0)
+    isFinal: bool = True
     text: str = Field(min_length=1, max_length=5000)
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
