@@ -238,18 +238,6 @@ export function Meeting() {
             text,
             confidence: typeof alt?.confidence === 'number' ? alt.confidence : null,
           })
-        } else if (sessionConfig.sttSendInterim) {
-          void postTranscriptSegment({
-            roomName: session.roomName,
-            participantId: session.participantId,
-            role: session.role,
-            condition: session.condition,
-            startMs: currentUtteranceStartMsRef.current ?? nowMs,
-            endMs: nowMs,
-            isFinal: false,
-            text,
-            confidence: typeof alt?.confidence === 'number' ? alt.confidence : null,
-          })
         }
       }
     }

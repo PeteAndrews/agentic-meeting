@@ -1,3 +1,5 @@
+import { API_BASE_URL } from '../config/api'
+
 export class ApiError extends Error {
   status: number
   bodyText?: string
@@ -9,13 +11,26 @@ export class ApiError extends Error {
   }
 }
 
+function isAbsoluteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value)
+}
+
+function resolveApiUrl(path: string): string {
+  if (!API_BASE_URL) return path
+  if (isAbsoluteUrl(path)) return path
+
+  if (path.startsWith('/')) return `${API_BASE_URL}${path}`
+  return `${API_BASE_URL}/${path}`
+}
+
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const headers = new Headers(init?.headers)
+  headers.set('Content-Type', 'application/json')
+  if (API_BASE_URL) headers.set('ngrok-skip-browser-warning', 'true')
+
+  const res = await fetch(resolveApiUrl(path), {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   })
 
   if (!res.ok) {

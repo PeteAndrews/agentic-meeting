@@ -32,6 +32,11 @@ function loadJitsiExternalApi(): Promise<void> {
 export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsiEvent }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const apiRef = useRef<JitsiMeetExternalAPI | null>(null)
+  const onJitsiEventRef = useRef<Props['onJitsiEvent']>(onJitsiEvent)
+
+  useEffect(() => {
+    onJitsiEventRef.current = onJitsiEvent
+  }, [onJitsiEvent])
 
   useEffect(() => {
     let cancelled = false
@@ -68,7 +73,7 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
 
       for (const name of events) {
         api.addEventListener(name, (payload: unknown) => {
-          onJitsiEvent?.(name, (payload ?? {}) as Record<string, unknown>)
+          onJitsiEventRef.current?.(name, (payload ?? {}) as Record<string, unknown>)
         })
       }
     }
@@ -80,7 +85,7 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
       apiRef.current?.dispose()
       apiRef.current = null
     }
-  }, [roomName, displayName, startWithAudioMuted, onJitsiEvent])
+  }, [roomName, displayName, startWithAudioMuted])
 
   return <div ref={hostRef} className="jitsiHost" />
 }
