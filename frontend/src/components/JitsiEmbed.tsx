@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 
+import { JITSI_DOMAIN, jitsiExternalApiScriptUrl } from '../config/jitsi'
+
 type Props = {
   roomName: string
   displayName: string
@@ -12,6 +14,8 @@ let jitsiExternalApiPromise: Promise<void> | null = null
 function loadJitsiExternalApi(): Promise<void> {
   if (jitsiExternalApiPromise) return jitsiExternalApiPromise
 
+  const scriptUrl = jitsiExternalApiScriptUrl()
+
   jitsiExternalApiPromise = new Promise<void>((resolve, reject) => {
     if (window.JitsiMeetExternalAPI) {
       resolve()
@@ -19,10 +23,10 @@ function loadJitsiExternalApi(): Promise<void> {
     }
 
     const script = document.createElement('script')
-    script.src = 'https://meet.jit.si/external_api.js'
+    script.src = scriptUrl
     script.async = true
     script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Failed to load Jitsi external_api.js'))
+    script.onerror = () => reject(new Error(`Failed to load Jitsi external_api.js from ${scriptUrl}`))
     document.head.appendChild(script)
   })
 
@@ -42,6 +46,8 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
     let cancelled = false
 
     async function start() {
+      console.log('Starting Jitsi meeting on domain:', JITSI_DOMAIN)
+
       await loadJitsiExternalApi()
       if (cancelled) return
       if (!hostRef.current) return
@@ -51,7 +57,7 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
 
       hostRef.current.innerHTML = ''
 
-      const api = new window.JitsiMeetExternalAPI('meet.jit.si', {
+      const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
         roomName,
         parentNode: hostRef.current,
         userInfo: { displayName },
@@ -89,4 +95,3 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
 
   return <div ref={hostRef} className="jitsiHost" />
 }
-
