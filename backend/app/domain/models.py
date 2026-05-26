@@ -72,3 +72,24 @@ class TranscriptSegmentRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
+
+class AgentJoinRequest(BaseModel):
+    roomName: str = Field(min_length=3, max_length=128)
+    displayName: Optional[str] = Field(default=None, min_length=1, max_length=64)
+
+
+class AgentLeaveRequest(BaseModel):
+    roomName: Optional[str] = Field(default=None, min_length=3, max_length=128)
+
+
+class AgentSpeakTestRequest(BaseModel):
+    roomName: str = Field(min_length=3, max_length=128)
+
+
+class AgentStatusResponse(BaseModel):
+    connected: bool
+    roomName: Optional[str] = None
+    displayName: Optional[str] = None
+    phase: str = "phase_5a"
+    mode: str = "unknown"
+

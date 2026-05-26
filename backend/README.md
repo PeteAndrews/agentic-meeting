@@ -31,3 +31,18 @@ By default, `POST /api/resolve-token` returns 404 for unknown tokens. For quick 
 $env:ALLOW_TOKEN_AUTO_CREATE="true"
 ```
 
+## Agent bot proxy endpoints (Phase 5A)
+
+Backend now exposes thin proxy endpoints for the separate `agent-bot` service:
+
+- `POST /api/agent/join`
+- `POST /api/agent/leave`
+- `GET /api/agent/status`
+- `POST /api/agent/speak-test` (placeholder in Task 1)
+
+Configure bot URL with:
+
+```powershell
+$env:AGENT_BOT_BASE_URL="http://127.0.0.1:3001"
+```
+
