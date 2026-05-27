@@ -1,6 +1,19 @@
+import { ensureBridgeMedia, hasBridgeMedia, type BridgeMediaResult } from "./bridgeMedia.js";
 import { config } from "./config.js";
 import { postAgentEvent } from "./backendClient.js";
+import { getBridgeDiagnostics, patchConferenceMediaHandlers } from "./jitsiFocusPatch.js";
+import { patchModeratorNonBlockingConferenceRequest } from "./jitsiModeratorPatch.js";
+import {
+  createLocalAudioTrackFromMediaStream,
+  disposeLocalTrack,
+  muteLocalAudio,
+  unmuteLocalAudio,
+  type JitsiLocalTrack,
+} from "./jitsiTrackUtils.js";
+import { ensureConferenceAudioUnmuted, republishLocalAudioToJvb } from "./jitsiMediaSync.js";
 import { loadJitsiMeet, type JitsiMeetGlobal } from "./loadJitsiMeet.js";
+import type { SpeakTestResult } from "./speakTypes.js";
+import { ToneSource } from "./toneSource.js";
 
 type BotState = {
   connected: boolean;
@@ -16,6 +29,7 @@ type ConnectionOptions = {
     muc: string;
     focus?: string;
   };
+  focusUserJid?: string;
   serviceUrl: string;
   bosh?: string;
   websocket?: string;
@@ -63,15 +77,23 @@ export class JitsiClient {
   private jitsi: JitsiMeetGlobal | null = null;
   private connection: any | null = null;
   private room: any | null = null;
+  private localAudioTracks: JitsiLocalTrack[] = [];
+  private toneSource: ToneSource | null = null;
+  private speakTestInProgress = false;
+  private bridgeSetupPromise: Promise<BridgeMediaResult> | null = null;
 
   public getStatus() {
     return {
       connected: this.state.connected,
       roomName: this.state.roomName,
       displayName: this.state.displayName,
-      phase: "phase_5a",
+      phase: "phase_5b",
       mode: this.state.mode,
       lastError: this.state.lastError,
+      bridgeMedia: hasBridgeMedia(this.room),
+      bridgeDiagnostics: getBridgeDiagnostics(),
+      mucOnlyJoin: config.disableFocusAtJoin,
+      speakTestInProgress: this.speakTestInProgress,
       jitsiLibUrl: config.jitsiLibUrl,
       jitsiServiceUrl: config.jitsiServiceUrl,
       jitsiBoshUrl: config.jitsiBoshUrl,
@@ -162,7 +184,208 @@ export class JitsiClient {
     return this.getStatus();
   }
 
+  public async speakTest(roomName: string): Promise<SpeakTestResult> {
+    if (config.fakeJitsi) {
+      return {
+        ok: true,
+        note: `fake mode: speak-test simulated for ${roomName}`,
+        durationMs: config.speakTestDurationMs,
+        frequencyHz: config.speakTestFrequencyHz,
+        bridgeMedia: false,
+      };
+    }
+
+    if (!this.state.connected || this.state.roomName !== roomName || !this.room || !this.jitsi) {
+      return {
+        ok: false,
+        note: `Agent C is not connected to room "${roomName}" (call POST /bot/join first)`,
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+
+    if (this.speakTestInProgress) {
+      return {
+        ok: false,
+        note: "speak-test already in progress",
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+
+    this.speakTestInProgress = true;
+    try {
+      await postAgentEvent({
+        roomName,
+        eventType: "agent.speak_test_started",
+        payload: {
+          durationMs: config.speakTestDurationMs,
+          frequencyHz: config.speakTestFrequencyHz,
+        },
+      });
+
+      const bridge = await this.waitForBridgeMedia();
+      if (!bridge.ready) {
+        return {
+          ok: false,
+          note: bridge.note,
+          bridgeMedia: false,
+        };
+      }
+
+      await republishLocalAudioToJvb(this.room);
+      await ensureConferenceAudioUnmuted(this.room);
+
+      const tone = new ToneSource({
+        frequencyHz: config.speakTestFrequencyHz,
+        gain: 0.75,
+      });
+      this.toneSource = tone;
+      let toneTrack: JitsiLocalTrack | null = null;
+      const previousTracks = [...this.localAudioTracks];
+
+      try {
+        for (const old of previousTracks) {
+          try {
+            await this.room.removeTrack(old);
+          } catch {
+            // ignore
+          }
+          disposeLocalTrack(old);
+        }
+        this.localAudioTracks = [];
+
+        const mediaTrack = tone.createTrack();
+        tone.start();
+        toneTrack = await createLocalAudioTrackFromMediaStream(this.jitsi, mediaTrack);
+
+        console.log("[agent-bot] adding tone track to conference");
+        await this.room.addTrack(toneTrack);
+        this.localAudioTracks = [toneTrack];
+
+        await republishLocalAudioToJvb(this.room);
+        await unmuteLocalAudio(this.room, toneTrack);
+        await ensureConferenceAudioUnmuted(this.room);
+
+        console.log(
+          `[agent-bot] speak-test playing ${config.speakTestFrequencyHz}Hz for ${config.speakTestDurationMs}ms`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, config.speakTestDurationMs));
+
+        await muteLocalAudio(this.room, toneTrack);
+
+        const note = `Played ${config.speakTestFrequencyHz} Hz tone for ${config.speakTestDurationMs} ms in ${roomName}`;
+        await postAgentEvent({
+          roomName,
+          eventType: "agent.speak_test_completed",
+          payload: { frequencyHz: config.speakTestFrequencyHz, durationMs: config.speakTestDurationMs },
+        });
+
+        return {
+          ok: true,
+          note,
+          durationMs: config.speakTestDurationMs,
+          frequencyHz: config.speakTestFrequencyHz,
+          bridgeMedia: true,
+        };
+      } catch (error) {
+        const message = formatJitsiError(error);
+        await postAgentEvent({
+          roomName,
+          eventType: "agent.speak_test_failed",
+          payload: { error: message },
+        });
+        return {
+          ok: false,
+          note: message,
+          bridgeMedia: hasBridgeMedia(this.room),
+        };
+      } finally {
+        tone.stop();
+        this.toneSource = null;
+
+        if (toneTrack) {
+          try {
+            await this.room?.removeTrack?.(toneTrack);
+          } catch {
+            // ignore
+          }
+          disposeLocalTrack(toneTrack);
+        }
+
+        try {
+          const JitsiMeetJS = this.jitsi;
+          if (JitsiMeetJS) {
+            const [silent] = await JitsiMeetJS.createLocalTracks({ devices: ["audio"] });
+            if (silent) {
+              await this.room.addTrack(silent);
+              await republishLocalAudioToJvb(this.room);
+              await muteLocalAudio(this.room, silent);
+              this.localAudioTracks = [silent];
+            }
+          }
+        } catch (restoreError) {
+          console.warn(
+            `[agent-bot] failed restoring silent mic after speak-test: ${formatJitsiError(restoreError)}`,
+          );
+          this.localAudioTracks = [];
+        }
+      }
+    } finally {
+      this.speakTestInProgress = false;
+    }
+  }
+
+  private startBackgroundBridgeSetup(): void {
+    if (!this.room || !this.jitsi || config.fakeJitsi) {
+      return;
+    }
+    if (hasBridgeMedia(this.room)) {
+      return;
+    }
+    console.log("[agent-bot] starting background bridge setup after MUC join");
+    this.bridgeSetupPromise = ensureBridgeMedia(this.room, this.jitsi);
+    void this.bridgeSetupPromise.then((result) => {
+      console.log(`[agent-bot] background bridge: ${result.note}`);
+    });
+  }
+
+  private async waitForBridgeMedia(): Promise<BridgeMediaResult> {
+    if (hasBridgeMedia(this.room)) {
+      return { ready: true, note: "JVB session already active" };
+    }
+    if (this.bridgeSetupPromise) {
+      const pending = await this.bridgeSetupPromise;
+      if (pending.ready) {
+        return pending;
+      }
+      this.bridgeSetupPromise = null;
+    }
+    this.bridgeSetupPromise = ensureBridgeMedia(this.room, this.jitsi ?? undefined);
+    return this.bridgeSetupPromise;
+  }
+
+  /** lib-jitsi on the server may default to AV1; node-webrtc needs VP8 for JVB video section. */
+  private forceVp8CodecPreference(room: any): void {
+    try {
+      const codecController = room?.qualityController?.codecController;
+      if (!codecController?.codecPreferenceOrder) {
+        return;
+      }
+      codecController.codecPreferenceOrder.jvb = ["vp8"];
+      codecController.codecPreferenceOrder.p2p = ["vp8"];
+      console.log("[agent-bot] forced JVB codec preference order to vp8");
+    } catch {
+      // ignore
+    }
+  }
+
   private async teardownLibJitsi(): Promise<void> {
+    this.toneSource?.stop();
+    this.toneSource = null;
+    for (const track of this.localAudioTracks) {
+      disposeLocalTrack(track);
+    }
+    this.localAudioTracks = [];
     if (this.room?.leave) {
       try {
         this.room.leave();
@@ -180,6 +403,7 @@ export class JitsiClient {
     this.room = null;
     this.connection = null;
     this.jitsi = null;
+    this.bridgeSetupPromise = null;
   }
 
   private buildConnectionOptions(domain: string, serviceUrl: string): ConnectionOptions {
@@ -192,6 +416,7 @@ export class JitsiClient {
         muc: `conference.${domain}`,
         focus: `focus.${domain}`,
       },
+      focusUserJid: config.focusUserJid,
       serviceUrl,
       bosh: config.jitsiBoshUrl,
       websocket,
@@ -298,39 +523,63 @@ export class JitsiClient {
       JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.INFO);
     }
 
+    const vp8Only = {
+      codecPreferenceOrder: ["VP8"],
+      preferredCodec: "VP8",
+      disabledCodec: "AV1",
+    };
+
     JitsiMeetJS.init({
       disableAudioLevels: true,
       disableThirdPartyRequests: true,
+      videoQuality: vp8Only,
+      p2p: { enabled: false, ...vp8Only },
     });
 
     const domain = config.jitsiDomain;
     this.connection = await this.connectWithFallback(JitsiMeetJS, domain, roomName);
 
-    // Skip Jicofo conference IQ (often hangs for headless lib-jitsi); join MUC directly.
-    const disableFocus = process.env.AGENT_BOT_DISABLE_FOCUS !== "false";
+    if (config.nonBlockingConferenceRequest && !config.disableFocusAtJoin) {
+      patchModeratorNonBlockingConferenceRequest(this.connection.xmpp);
+    }
+
+    const disableFocus = config.disableFocusAtJoin;
     const room = this.connection.initJitsiConference(roomName, {
       disableFocus,
-      openBridgeChannel: false,
-      startAudioMuted: true,
-      startWithAudioMuted: true,
+      openBridgeChannel: true,
+      startAudioMuted: false,
+      startWithAudioMuted: false,
       startVideoMuted: true,
       startWithVideoMuted: true,
-      p2p: { enabled: false },
+      ignoreStartMuted: true,
+      startAudioOnly: true,
+      videoQuality: vp8Only,
+      p2p: { enabled: false, ...vp8Only },
     });
-    if (disableFocus) {
-      console.log("[agent-bot] conference focus disabled — joining MUC without Jicofo allocate");
-    }
+    console.log(
+      disableFocus
+        ? "[agent-bot] joining via MUC (fast); bridge media requested on speak-test"
+        : "[agent-bot] joining with Jicofo conference request at join (may be slow or hang in Node)",
+    );
     this.room = room;
+    patchConferenceMediaHandlers(room);
+    this.forceVp8CodecPreference(room);
     room.setDisplayName(displayName);
 
+    this.localAudioTracks = [];
     try {
       const localTracks = await JitsiMeetJS.createLocalTracks({
         devices: ["audio"],
       });
       for (const track of localTracks) {
         await room.addTrack(track);
+        this.localAudioTracks.push(track);
       }
       console.log(`[agent-bot] added ${localTracks.length} local audio track(s)`);
+      for (const track of this.localAudioTracks) {
+        await unmuteLocalAudio(room, track);
+      }
+      await ensureConferenceAudioUnmuted(room);
     } catch (error) {
       console.warn(`[agent-bot] createLocalTracks failed: ${formatJitsiError(error)}`);
     }
@@ -339,9 +588,17 @@ export class JitsiClient {
       console.log(`[agent-bot] MUC joined: ${roomName}`);
     });
 
+    room.on(JitsiMeetJS.events.conference.TRACK_ADDED, (track: unknown) => {
+      console.log("[agent-bot] conference TRACK_ADDED", track);
+    });
+
+    room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, (...args: unknown[]) => {
+      console.error("[agent-bot] CONFERENCE_FAILED:", ...args);
+    });
+
     const conferenceEvents = JitsiMeetJS.events.conference as Record<string, string>;
     for (const [key, eventName] of Object.entries(conferenceEvents)) {
-      if (/FOCUS|FAIL|ERROR/i.test(key)) {
+      if (/FOCUS|FAIL|ERROR|MEDIA_SESSION|JINGLE|SESSION/i.test(key)) {
         room.on(eventName, (...args: unknown[]) => {
           console.warn(`[agent-bot] conference event ${key}:`, ...args);
         });
@@ -361,7 +618,9 @@ export class JitsiClient {
         room.off(joinSuccessEvent, onJoined);
         room.off(JitsiMeetJS.events.conference.CONFERENCE_FAILED, onConferenceFailed);
         console.log(
-          `[agent-bot] join complete (${disableFocus ? "MUC only" : "conference media"})`,
+          `[agent-bot] join complete (${disableFocus ? "MUC presence" : "with focus at join"}; bridge=${
+            hasBridgeMedia(room) ? "yes" : "no"
+          })`,
         );
         resolve();
       };
@@ -377,5 +636,7 @@ export class JitsiClient {
       room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, onConferenceFailed);
       room.join();
     });
+
+    this.startBackgroundBridgeSetup();
   }
 }

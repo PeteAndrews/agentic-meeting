@@ -54,8 +54,16 @@ export function createBotApi(jitsiClient: JitsiClient, audioPublisher: AudioPubl
     if (!body?.roomName) {
       return res.status(400).json({ error: "roomName is required" });
     }
-    const result = await audioPublisher.speakTest(body.roomName);
-    return res.json({ status: "ok", ...result });
+    try {
+      const result = await audioPublisher.speakTest(body.roomName);
+      if (!result.ok) {
+        return res.status(409).json({ status: "error", ...result });
+      }
+      return res.json({ status: "ok", ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
   });
 
   return router;

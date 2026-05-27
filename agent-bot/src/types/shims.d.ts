@@ -4,6 +4,17 @@ declare module "@roamhq/wrtc" {
   export const RTCIceCandidate: typeof globalThis.RTCIceCandidate;
   export const MediaStream: typeof globalThis.MediaStream;
   export const MediaStreamTrack: typeof globalThis.MediaStreamTrack;
+  export const nonstandard: {
+    RTCAudioSource: new () => {
+      createTrack(): MediaStreamTrack;
+      onData(data: {
+        samples: Int16Array;
+        sampleRate: number;
+        bitsPerSample?: number;
+        channelCount?: number;
+      }): void;
+    };
+  };
 }
 
 declare const JitsiMeetJS: unknown;

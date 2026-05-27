@@ -30,7 +30,7 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const jitsiClient = new JitsiClient();
-const audioPublisher = new AudioPublisher();
+const audioPublisher = new AudioPublisher(jitsiClient);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "agent-bot", mode: jitsiClient.getStatus().mode });

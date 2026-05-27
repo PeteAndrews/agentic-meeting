@@ -1,13 +1,12 @@
-export type SpeakTestResult = {
-  ok: boolean;
-  note: string;
-};
+import type { JitsiClient } from "./jitsiClient.js";
+import type { SpeakTestResult } from "./speakTypes.js";
+
+export type { SpeakTestResult } from "./speakTypes.js";
 
 export class AudioPublisher {
+  public constructor(private readonly jitsiClient: JitsiClient) {}
+
   public async speakTest(roomName: string): Promise<SpeakTestResult> {
-    return {
-      ok: true,
-      note: `speak-test placeholder queued for room ${roomName}`,
-    };
+    return this.jitsiClient.speakTest(roomName);
   }
 }

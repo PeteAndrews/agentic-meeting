@@ -41,6 +41,13 @@ def _post_json(path: str, payload: dict[str, Any], timeout: float = 10) -> dict[
             return json.loads(content) if content else {}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8") or str(exc)
+        try:
+            parsed = json.loads(detail) if detail else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": detail}
+        if exc.code == 409:
+            note = parsed.get("note") if isinstance(parsed, dict) else None
+            raise HTTPException(status_code=409, detail=note or parsed) from exc
         raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
     except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
         reason = getattr(exc, "reason", str(exc))
@@ -111,7 +118,7 @@ def agent_status() -> AgentStatusResponse:
         connected=bool(status.get("connected", False)),
         roomName=status.get("roomName"),
         displayName=status.get("displayName"),
-        phase=str(status.get("phase", "phase_5a")),
+        phase=str(status.get("phase", "phase_5b")),
         mode=str(status.get("mode", "unknown")),
     )
 
@@ -120,5 +127,7 @@ def agent_status() -> AgentStatusResponse:
 def agent_speak_test(body: AgentSpeakTestRequest) -> dict[str, Any]:
     event = _backend_event(body.roomName, "agent.speak_test_requested", {})
     _persist_event(event)
-    result = _post_json("/bot/speak-test", body.model_dump())
-    return {"status": "ok", "event": event.model_dump(), "bot": result}
+    result = _post_json("/bot/speak-test", body.model_dump(), timeout=120)
+    completed = _backend_event(body.roomName, "agent.speak_test_completed", {"bot": result})
+    _persist_event(completed)
+    return {"status": "ok", "event": event.model_dump(), "completed": completed.model_dump(), "bot": result}

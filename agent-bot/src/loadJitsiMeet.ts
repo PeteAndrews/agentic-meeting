@@ -10,10 +10,12 @@ import {
 import { config } from "./config.js";
 import {
   applyWrtcMediaDevices,
+  getWebRtcGlobalsForVm,
   installWebRtcAdapter,
   isWebRtcAdapterInstalled,
 } from "./webrtcAdapter.js";
 import { installWebSocketShim } from "./webSocketShim.js";
+import { getNodeCrypto, installCryptoPolyfill } from "./cryptoPolyfill.js";
 import { Element as XmlElement, Node as XmlNode } from "@xmldom/xmldom";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,12 +38,24 @@ export async function loadJitsiMeet(): Promise<JitsiMeetGlobal> {
   return loadPromise;
 }
 
+function applyWebRtcToDomWindow(domWindow: import("happy-dom").Window): void {
+  const win = domWindow as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(getWebRtcGlobalsForVm())) {
+    if (value !== undefined) {
+      win[key] = value;
+    }
+  }
+}
+
 function buildJitsiVmContext(domWindow: import("happy-dom").Window, shimNavigator: Navigator): vm.Context {
   const nodeRequire = createRequire(import.meta.url);
   const g = globalThis as Record<string, unknown>;
   const WebSocketImpl = g.WebSocket;
 
+  applyWebRtcToDomWindow(domWindow);
+
   const xmlDocument = getXmlDocument() ?? domWindow.document;
+  const webRtcGlobals = getWebRtcGlobalsForVm();
 
   const context: Record<string, unknown> = {
     window: domWindow,
@@ -50,6 +64,7 @@ function buildJitsiVmContext(domWindow: import("happy-dom").Window, shimNavigato
     document: xmlDocument,
     navigator: shimNavigator,
     location: domWindow.location,
+    crypto: getNodeCrypto(),
     XMLHttpRequest: domWindow.XMLHttpRequest,
     DOMParser: g.DOMParser,
     XMLSerializer: g.XMLSerializer,
@@ -65,11 +80,7 @@ function buildJitsiVmContext(domWindow: import("happy-dom").Window, shimNavigato
     clearImmediate,
     queueMicrotask,
     fetch,
-    RTCPeerConnection: g.RTCPeerConnection,
-    RTCSessionDescription: g.RTCSessionDescription,
-    RTCIceCandidate: g.RTCIceCandidate,
-    MediaStream: g.MediaStream,
-    MediaStreamTrack: g.MediaStreamTrack,
+    ...webRtcGlobals,
     structuredClone: globalThis.structuredClone?.bind(globalThis),
     TextEncoder: globalThis.TextEncoder,
     TextDecoder: globalThis.TextDecoder,
@@ -80,6 +91,7 @@ function buildJitsiVmContext(domWindow: import("happy-dom").Window, shimNavigato
     WebSocket: WebSocketImpl,
     Element: XmlElement,
     Node: XmlNode,
+    Event: (domWindow as unknown as { Event?: unknown }).Event ?? g.Event,
     Error,
     Promise,
     JSON,
@@ -105,6 +117,7 @@ function buildJitsiVmContext(domWindow: import("happy-dom").Window, shimNavigato
 
 async function loadJitsiMeetInternal(): Promise<JitsiMeetGlobal> {
   installBrowserShim();
+  installCryptoPolyfill();
   installWebSocketShim();
   installWebRtcAdapter();
   applyWrtcMediaDevices();
@@ -121,6 +134,11 @@ async function loadJitsiMeetInternal(): Promise<JitsiMeetGlobal> {
     );
   }
 
+  const webRtcGlobals = getWebRtcGlobalsForVm();
+  if (!webRtcGlobals.RTCRtpSender) {
+    throw new Error("RTCRtpSender not installed — lib-jitsi JVB accept will fail");
+  }
+
   const url = config.jitsiLibUrl;
   console.log(`[agent-bot] loading lib-jitsi-meet from ${url}`);
 
@@ -131,6 +149,11 @@ async function loadJitsiMeetInternal(): Promise<JitsiMeetGlobal> {
 
   const source = await response.text();
   const context = buildJitsiVmContext(domWindow, shimNavigator);
+  installCryptoPolyfill(
+    context,
+    domWindow as unknown as Record<string, unknown>,
+    context.window as Record<string, unknown>,
+  );
   const script = new vm.Script(source, { filename: "lib-jitsi-meet.min.js" });
   script.runInContext(context);
 

@@ -8,6 +8,7 @@ import { Window } from "happy-dom";
 
 import { Element as XmlElement, Node as XmlNode } from "@xmldom/xmldom";
 import { installXmlDomPolyfills } from "./xmlDomPolyfills.js";
+import { installCryptoPolyfill } from "./cryptoPolyfill.js";
 
 /** Browser globals so lib-jitsi-meet / Strophe can run in Node. */
 
@@ -158,6 +159,7 @@ export function installBrowserShim(): void {
   win.DOMParser = DOMParser;
   win.XMLSerializer = XMLSerializer;
   win.XMLHttpRequest = domWindow.XMLHttpRequest;
+  win.Event = domWindow.Event;
 
   defineGlobal("window", domWindow);
   defineGlobal("self", domWindow);
@@ -167,11 +169,14 @@ export function installBrowserShim(): void {
   defineGlobal("XMLSerializer", XMLSerializer);
   defineGlobal("Element", XmlElement);
   defineGlobal("Node", XmlNode);
+  defineGlobal("Event", domWindow.Event);
   defineGlobal("location", domWindow.location);
   defineGlobal("localStorage", new MemoryStorage());
   defineGlobal("sessionStorage", new MemoryStorage());
 
   patchNodeNavigator(mediaDevices);
+
+  installCryptoPolyfill(domWindow as unknown as Record<string, unknown>, shimNavigator as unknown as Record<string, unknown>);
 
   installed = true;
 }

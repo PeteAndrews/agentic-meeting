@@ -38,7 +38,7 @@ Backend now exposes thin proxy endpoints for the separate `agent-bot` service:
 - `POST /api/agent/join`
 - `POST /api/agent/leave`
 - `GET /api/agent/status`
-- `POST /api/agent/speak-test` (placeholder in Task 1)
+- `POST /api/agent/speak-test` — plays ~440 Hz tone (A+B should be in room first; bot requests JVB on demand)
 
 Configure bot URL with:
 
