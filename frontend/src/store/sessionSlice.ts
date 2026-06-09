@@ -3,12 +3,15 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 export type Condition = 'HH' | 'HA'
 export type Role = 'moderator' | 'active' | 'silent' | 'proxy' | 'agent'
 
+export type VoiceOutputMode = 'generic_tts' | 'cloned_voice_tts'
+
 export type Session = {
   participantId: string
   role: Role
   condition: Condition
   roomName: string
   displayName: string
+  voiceOutputMode?: VoiceOutputMode
 }
 
 type SessionState = {

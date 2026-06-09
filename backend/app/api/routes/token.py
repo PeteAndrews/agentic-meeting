@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from app.domain.models import Condition, ResolveTokenRequest, ResolveTokenResponse, Role
+from app.domain.models import Condition, ResolveTokenRequest, ResolveTokenResponse, Role, VoiceMode
 from app.storage.jsonl import append_jsonl, data_dir, now_iso
 
 router = APIRouter()
@@ -62,12 +62,20 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
     try:
         role = Role(rec["role"])
         condition = Condition(rec["condition"])
+        voice_mode: VoiceMode | None = None
+        if role == Role.PROXY:
+            raw_mode = rec.get("voiceOutputMode", "generic_tts")
+            if raw_mode in ("generic_tts", "cloned_voice_tts"):
+                voice_mode = raw_mode  # type: ignore[assignment]
+            else:
+                voice_mode = "generic_tts"
         return ResolveTokenResponse(
             participantId=str(rec["participantId"]),
             role=role,
             condition=condition,
             roomName=str(rec["roomName"]),
             displayName=str(rec.get("displayName") or rec.get("participantId") or "Participant"),
+            voiceOutputMode=voice_mode,
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Invalid token registry record: {e}") from e

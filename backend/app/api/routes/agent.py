@@ -20,6 +20,7 @@ from app.domain.models import (
     LogEventRequest,
     Role,
 )
+from app.services.agent_join import join_agent_room
 from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
@@ -99,10 +100,7 @@ def _persist_event(event: LogEventRequest) -> None:
 
 @router.post("/agent/join")
 def agent_join(body: AgentJoinRequest) -> dict[str, Any]:
-    event = _backend_event(body.roomName, "agent.join_requested", {"displayName": body.displayName or "Agent C"})
-    _persist_event(event)
-    result = _post_json("/bot/join", body.model_dump(), timeout=90)
-    return {"status": "ok", "event": event.model_dump(), "bot": result}
+    return join_agent_room(body.roomName, body.displayName)
 
 
 @router.post("/agent/leave")

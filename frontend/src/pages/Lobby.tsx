@@ -111,6 +111,12 @@ export function Lobby() {
               <div className="v">{session.roomName}</div>
               <div className="k">displayName</div>
               <div className="v">{session.displayName}</div>
+              {session.voiceOutputMode && (
+                <>
+                  <div className="k">voiceOutputMode</div>
+                  <div className="v">{session.voiceOutputMode}</div>
+                </>
+              )}
             </div>
           </section>
         )}

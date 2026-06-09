@@ -29,6 +29,7 @@ class ResolveTokenResponse(BaseModel):
     condition: Condition
     roomName: str
     displayName: str
+    voiceOutputMode: Optional[VoiceMode] = None
 
 
 class SessionConfig(BaseModel):
@@ -102,4 +103,35 @@ class AgentStatusResponse(BaseModel):
     displayName: Optional[str] = None
     phase: str = "phase_5c"
     mode: str = "unknown"
+
+
+class AgentProfile(BaseModel):
+    roomName: str
+    participantId: str
+    voiceOutputMode: VoiceMode = "generic_tts"
+    voiceSampleStored: bool = False
+    calibrationCompletedAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+
+class AgentProfileKey(BaseModel):
+    roomName: str = Field(min_length=1, max_length=256)
+    participantId: str = Field(min_length=1, max_length=128)
+
+
+class AgentProfileUpdate(AgentProfileKey):
+    voiceOutputMode: Optional[VoiceMode] = None
+
+
+class AgentProfileCompleteResponse(BaseModel):
+    profile: AgentProfile
+    agentJoinOk: bool
+    agentJoinError: Optional[str] = None
+    agentJoin: Optional[dict[str, Any]] = None
+
+
+class AgentProfileVoiceSampleRequest(AgentProfileKey):
+    voiceOutputMode: Optional[VoiceMode] = None
+    audioBase64: str = Field(min_length=16, max_length=8_000_000)
+    mimeType: str = Field(default="audio/webm", min_length=3, max_length=64)
 

@@ -23,7 +23,23 @@ An example token registry is provided at `backend/data/token_registry.example.js
 
 To use it, copy it to `backend/data/token_registry.jsonl` before starting the API.
 
-HA tokens include `demo-ha-C` with role **`proxy`** — Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before 6A.
+HA tokens include:
+
+- `demo-ha-C` — role **`proxy`**, `voiceOutputMode: generic_tts` (OpenAI TTS; no voice recording)
+- `demo-ha-C-clone` — role **`proxy`**, `voiceOutputMode: cloned_voice_tts` (requires voice sample at onboarding)
+
+Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before 6B.
+
+### Agent profile / onboarding (Phase 6B)
+
+Proxy users complete a short onboarding in the Agent Console. Profiles are stored under `backend/data/agent_profiles/` (gitignored). Voice samples under `backend/data/voice_samples/`.
+
+- `GET /api/agent-profile?roomName=...&participantId=...&voiceOutputMode=...`
+- `PUT /api/agent-profile`
+- `POST /api/agent-profile/voice-sample` (clone arm only)
+- `POST /api/agent-profile/complete` — marks onboarding done and **auto-joins Agent C** in the room
+
+`voiceOutputMode` is pre-assigned on the proxy token and returned from `POST /api/resolve-token`.
 
 ## Dev token convenience
 
@@ -75,3 +91,10 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
   -TimeoutSec 180
 ```
 
+## Study flow (HA demo)
+
+1. Start backend, agent-bot, and frontend.
+2. Person A joins Jitsi with `demo-ha-A` (moderator should be in the room first).
+3. Person B joins with `demo-ha-B`.
+4. Person C opens Agent Console with `demo-ha-C` or `demo-ha-C-clone`.
+5. C completes onboarding; Agent C joins automatically when onboarding finishes.
