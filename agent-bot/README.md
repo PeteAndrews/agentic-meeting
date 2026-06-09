@@ -1,4 +1,4 @@
-# Agent Bot (Phase 5A–5B)
+# Agent Bot (Phase 5A–5C)
 
 Programmable HA participant service that joins Jitsi rooms as `Agent C`.
 
@@ -107,3 +107,4 @@ npm run dev
 - `POST /bot/join` — `{ "roomName": "am-demo-ha", "displayName": "Agent C" }`
 - `POST /bot/leave` — `{ "roomName": "am-demo-ha" }`
 - `POST /bot/speak-test` — `{ "roomName": "am-demo-ha" }`
+- `POST /bot/speak` — `{ "roomName": "am-demo-ha", "audioBase64": "...", "sampleRate": 24000, "durationMs": 3200, "text": "..." }` (normally called by backend after TTS)

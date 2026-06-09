@@ -16,6 +16,14 @@ type SpeakTestBody = {
   roomName?: string;
 };
 
+type SpeakBody = {
+  roomName?: string;
+  audioBase64?: string;
+  sampleRate?: number;
+  durationMs?: number;
+  text?: string;
+};
+
 export function createBotApi(jitsiClient: JitsiClient, audioPublisher: AudioPublisher): Router {
   const router = Router();
 
@@ -56,6 +64,35 @@ export function createBotApi(jitsiClient: JitsiClient, audioPublisher: AudioPubl
     }
     try {
       const result = await audioPublisher.speakTest(body.roomName);
+      if (!result.ok) {
+        return res.status(409).json({ status: "error", ...result });
+      }
+      return res.json({ status: "ok", ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  router.post("/speak", async (req, res) => {
+    const body = req.body as SpeakBody;
+    if (!body?.roomName) {
+      return res.status(400).json({ error: "roomName is required" });
+    }
+    if (!body?.audioBase64) {
+      return res.status(400).json({ error: "audioBase64 is required" });
+    }
+    if (!body?.sampleRate || body.sampleRate <= 0) {
+      return res.status(400).json({ error: "sampleRate must be a positive number" });
+    }
+    try {
+      const result = await audioPublisher.speak({
+        roomName: body.roomName,
+        audioBase64: body.audioBase64,
+        sampleRate: body.sampleRate,
+        durationMs: body.durationMs,
+        text: body.text,
+      });
       if (!result.ok) {
         return res.status(409).json({ status: "error", ...result });
       }

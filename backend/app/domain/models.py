@@ -86,10 +86,19 @@ class AgentSpeakTestRequest(BaseModel):
     roomName: str = Field(min_length=3, max_length=128)
 
 
+VoiceMode = Literal["generic_tts", "cloned_voice_tts", "manual_test_audio"]
+
+
+class AgentSpeakRequest(BaseModel):
+    roomName: str = Field(min_length=3, max_length=128)
+    text: str = Field(min_length=1, max_length=4096)
+    voiceMode: VoiceMode = "generic_tts"
+
+
 class AgentStatusResponse(BaseModel):
     connected: bool
     roomName: Optional[str] = None
     displayName: Optional[str] = None
-    phase: str = "phase_5a"
+    phase: str = "phase_5c"
     mode: str = "unknown"
 

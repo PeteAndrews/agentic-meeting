@@ -31,18 +31,45 @@ By default, `POST /api/resolve-token` returns 404 for unknown tokens. For quick 
 $env:ALLOW_TOKEN_AUTO_CREATE="true"
 ```
 
-## Agent bot proxy endpoints (Phase 5A)
+## Agent bot proxy endpoints (Phase 5A–5C)
 
-Backend now exposes thin proxy endpoints for the separate `agent-bot` service:
+Backend exposes thin proxy endpoints for the separate `agent-bot` service:
 
 - `POST /api/agent/join`
 - `POST /api/agent/leave`
 - `GET /api/agent/status`
 - `POST /api/agent/speak-test` — plays ~440 Hz tone (A+B should be in room first; bot requests JVB on demand)
+- `POST /api/agent/speak` — TTS text → OpenAI → publish speech in Jitsi (Phase 5C)
 
 Configure bot URL with:
 
 ```powershell
 $env:AGENT_BOT_BASE_URL="http://127.0.0.1:3001"
+```
+
+### TTS (Phase 5C)
+
+`POST /api/agent/speak` accepts `{ "roomName": "am-demo-ha", "text": "Hello everyone." }` and uses OpenAI speech synthesis before forwarding PCM audio to `agent-bot`.
+
+Required:
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
+
+Optional:
+
+```powershell
+$env:TTS_VOICE="alloy"   # OpenAI voice name
+$env:TTS_MODEL="tts-1"
+```
+
+Example:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
+  -ContentType "application/json" `
+  -Body '{"roomName":"am-demo-ha","text":"Hello, this is Agent C speaking through TTS."}' `
+  -TimeoutSec 180
 ```
 

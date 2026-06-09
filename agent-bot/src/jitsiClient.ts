@@ -12,7 +12,8 @@ import {
 } from "./jitsiTrackUtils.js";
 import { ensureConferenceAudioUnmuted, republishLocalAudioToJvb } from "./jitsiMediaSync.js";
 import { loadJitsiMeet, type JitsiMeetGlobal } from "./loadJitsiMeet.js";
-import type { SpeakTestResult } from "./speakTypes.js";
+import type { SpeakAudioInput, SpeakResult, SpeakTestResult } from "./speakTypes.js";
+import { pcmDurationMs, PcmAudioSource } from "./pcmAudioSource.js";
 import { ToneSource } from "./toneSource.js";
 
 type BotState = {
@@ -79,7 +80,8 @@ export class JitsiClient {
   private room: any | null = null;
   private localAudioTracks: JitsiLocalTrack[] = [];
   private toneSource: ToneSource | null = null;
-  private speakTestInProgress = false;
+  private pcmSource: PcmAudioSource | null = null;
+  private audioPublishInProgress = false;
   private bridgeSetupPromise: Promise<BridgeMediaResult> | null = null;
 
   public getStatus() {
@@ -87,13 +89,13 @@ export class JitsiClient {
       connected: this.state.connected,
       roomName: this.state.roomName,
       displayName: this.state.displayName,
-      phase: "phase_5b",
+      phase: "phase_5c",
       mode: this.state.mode,
       lastError: this.state.lastError,
       bridgeMedia: hasBridgeMedia(this.room),
       bridgeDiagnostics: getBridgeDiagnostics(),
       mucOnlyJoin: config.disableFocusAtJoin,
-      speakTestInProgress: this.speakTestInProgress,
+      audioPublishInProgress: this.audioPublishInProgress,
       jitsiLibUrl: config.jitsiLibUrl,
       jitsiServiceUrl: config.jitsiServiceUrl,
       jitsiBoshUrl: config.jitsiBoshUrl,
@@ -203,15 +205,15 @@ export class JitsiClient {
       };
     }
 
-    if (this.speakTestInProgress) {
+    if (this.audioPublishInProgress) {
       return {
         ok: false,
-        note: "speak-test already in progress",
+        note: "audio publish already in progress",
         bridgeMedia: hasBridgeMedia(this.room),
       };
     }
 
-    this.speakTestInProgress = true;
+    this.audioPublishInProgress = true;
     try {
       await postAgentEvent({
         roomName,
@@ -312,26 +314,195 @@ export class JitsiClient {
           disposeLocalTrack(toneTrack);
         }
 
-        try {
-          const JitsiMeetJS = this.jitsi;
-          if (JitsiMeetJS) {
-            const [silent] = await JitsiMeetJS.createLocalTracks({ devices: ["audio"] });
-            if (silent) {
-              await this.room.addTrack(silent);
-              await republishLocalAudioToJvb(this.room);
-              await muteLocalAudio(this.room, silent);
-              this.localAudioTracks = [silent];
-            }
-          }
-        } catch (restoreError) {
-          console.warn(
-            `[agent-bot] failed restoring silent mic after speak-test: ${formatJitsiError(restoreError)}`,
-          );
-          this.localAudioTracks = [];
-        }
+        await this.restoreSilentMic();
       }
     } finally {
-      this.speakTestInProgress = false;
+      this.audioPublishInProgress = false;
+    }
+  }
+
+  public async speak(input: SpeakAudioInput): Promise<SpeakResult> {
+    const { roomName, audioBase64, sampleRate, text } = input;
+
+    if (config.fakeJitsi) {
+      return {
+        ok: true,
+        note: `fake mode: speak simulated for ${roomName}`,
+        durationMs: input.durationMs,
+        bridgeMedia: false,
+        text,
+      };
+    }
+
+    if (!this.state.connected || this.state.roomName !== roomName || !this.room || !this.jitsi) {
+      return {
+        ok: false,
+        note: `Agent C is not connected to room "${roomName}" (call POST /bot/join first)`,
+        bridgeMedia: hasBridgeMedia(this.room),
+        text,
+      };
+    }
+
+    if (this.audioPublishInProgress) {
+      return {
+        ok: false,
+        note: "audio publish already in progress",
+        bridgeMedia: hasBridgeMedia(this.room),
+        text,
+      };
+    }
+
+    let pcm: Int16Array;
+    try {
+      const raw = Buffer.from(audioBase64, "base64");
+      if (raw.byteLength % 2 !== 0) {
+        return {
+          ok: false,
+          note: "PCM payload must have an even byte length",
+          bridgeMedia: hasBridgeMedia(this.room),
+          text,
+        };
+      }
+      const bytes = new Uint8Array(raw);
+      pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+    } catch (error) {
+      return {
+        ok: false,
+        note: `Invalid audioBase64: ${formatJitsiError(error)}`,
+        bridgeMedia: hasBridgeMedia(this.room),
+        text,
+      };
+    }
+
+    if (pcm.length === 0) {
+      return {
+        ok: false,
+        note: "Empty PCM audio payload",
+        bridgeMedia: hasBridgeMedia(this.room),
+        text,
+      };
+    }
+
+    const durationMs = input.durationMs ?? pcmDurationMs(pcm, sampleRate);
+
+    this.audioPublishInProgress = true;
+    try {
+      await postAgentEvent({
+        roomName,
+        eventType: "agent.speak_playback_started",
+        payload: { durationMs, sampleRate, text },
+      });
+
+      const bridge = await this.waitForBridgeMedia();
+      if (!bridge.ready) {
+        return {
+          ok: false,
+          note: bridge.note,
+          bridgeMedia: false,
+          text,
+        };
+      }
+
+      await republishLocalAudioToJvb(this.room);
+      await ensureConferenceAudioUnmuted(this.room);
+
+      const pcmPlayer = new PcmAudioSource(pcm, sampleRate);
+      this.pcmSource = pcmPlayer;
+      let speechTrack: JitsiLocalTrack | null = null;
+      const previousTracks = [...this.localAudioTracks];
+
+      try {
+        for (const old of previousTracks) {
+          try {
+            await this.room.removeTrack(old);
+          } catch {
+            // ignore
+          }
+          disposeLocalTrack(old);
+        }
+        this.localAudioTracks = [];
+
+        const mediaTrack = pcmPlayer.createTrack();
+        pcmPlayer.start();
+        speechTrack = await createLocalAudioTrackFromMediaStream(this.jitsi, mediaTrack);
+
+        console.log("[agent-bot] adding TTS track to conference");
+        await this.room.addTrack(speechTrack);
+        this.localAudioTracks = [speechTrack];
+
+        await republishLocalAudioToJvb(this.room);
+        await unmuteLocalAudio(this.room, speechTrack);
+        await ensureConferenceAudioUnmuted(this.room);
+
+        console.log(`[agent-bot] speak playing TTS for ~${durationMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, durationMs + 250));
+
+        await muteLocalAudio(this.room, speechTrack);
+
+        const note = `Played TTS audio (${durationMs} ms) in ${roomName}`;
+        await postAgentEvent({
+          roomName,
+          eventType: "agent.speak_playback_finished",
+          payload: { durationMs, text },
+        });
+
+        return {
+          ok: true,
+          note,
+          durationMs,
+          bridgeMedia: true,
+          text,
+        };
+      } catch (error) {
+        const message = formatJitsiError(error);
+        await postAgentEvent({
+          roomName,
+          eventType: "agent.speak_playback_failed",
+          payload: { error: message, text },
+        });
+        return {
+          ok: false,
+          note: message,
+          bridgeMedia: hasBridgeMedia(this.room),
+          text,
+        };
+      } finally {
+        pcmPlayer.stop();
+        this.pcmSource = null;
+
+        if (speechTrack) {
+          try {
+            await this.room?.removeTrack?.(speechTrack);
+          } catch {
+            // ignore
+          }
+          disposeLocalTrack(speechTrack);
+        }
+
+        await this.restoreSilentMic();
+      }
+    } finally {
+      this.audioPublishInProgress = false;
+    }
+  }
+
+  private async restoreSilentMic(): Promise<void> {
+    try {
+      const JitsiMeetJS = this.jitsi;
+      if (JitsiMeetJS && this.room) {
+        const [silent] = await JitsiMeetJS.createLocalTracks({ devices: ["audio"] });
+        if (silent) {
+          await this.room.addTrack(silent);
+          await republishLocalAudioToJvb(this.room);
+          await muteLocalAudio(this.room, silent);
+          this.localAudioTracks = [silent];
+        }
+      }
+    } catch (restoreError) {
+      console.warn(
+        `[agent-bot] failed restoring silent mic after audio publish: ${formatJitsiError(restoreError)}`,
+      );
+      this.localAudioTracks = [];
     }
   }
 
@@ -382,6 +553,8 @@ export class JitsiClient {
   private async teardownLibJitsi(): Promise<void> {
     this.toneSource?.stop();
     this.toneSource = null;
+    this.pcmSource?.stop();
+    this.pcmSource = null;
     for (const track of this.localAudioTracks) {
       disposeLocalTrack(track);
     }

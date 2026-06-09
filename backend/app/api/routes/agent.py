@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -12,12 +13,14 @@ from fastapi import APIRouter, HTTPException
 from app.domain.models import (
     AgentJoinRequest,
     AgentLeaveRequest,
+    AgentSpeakRequest,
     AgentSpeakTestRequest,
     AgentStatusResponse,
     Condition,
     LogEventRequest,
     Role,
 )
+from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
@@ -131,3 +134,54 @@ def agent_speak_test(body: AgentSpeakTestRequest) -> dict[str, Any]:
     completed = _backend_event(body.roomName, "agent.speak_test_completed", {"bot": result})
     _persist_event(completed)
     return {"status": "ok", "event": event.model_dump(), "completed": completed.model_dump(), "bot": result}
+
+
+@router.post("/agent/speak")
+def agent_speak(body: AgentSpeakRequest) -> dict[str, Any]:
+    requested = _backend_event(
+        body.roomName,
+        "agent.speak_requested",
+        {"text": body.text, "voiceMode": body.voiceMode},
+    )
+    _persist_event(requested)
+
+    try:
+        pcm, sample_rate = synthesize_speech(body.text, voice_mode=body.voiceMode)
+    except TtsError as exc:
+        failed = _backend_event(body.roomName, "agent.speak_failed", {"error": str(exc)})
+        _persist_event(failed)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    duration_ms = pcm_duration_ms(pcm, sample_rate)
+    started = _backend_event(
+        body.roomName,
+        "agent.speak_started",
+        {"durationMs": duration_ms, "sampleRate": sample_rate, "voiceMode": body.voiceMode},
+    )
+    _persist_event(started)
+
+    bot_payload = {
+        "roomName": body.roomName,
+        "audioBase64": base64.b64encode(pcm).decode("ascii"),
+        "sampleRate": sample_rate,
+        "durationMs": duration_ms,
+        "text": body.text,
+    }
+    # Bridge setup + full playback; allow generous headroom over audio length.
+    timeout = max(120.0, duration_ms / 1000.0 + 90.0)
+    result = _post_json("/bot/speak", bot_payload, timeout=timeout)
+
+    completed = _backend_event(
+        body.roomName,
+        "agent.speak_finished",
+        {"text": body.text, "durationMs": duration_ms, "bot": result},
+    )
+    _persist_event(completed)
+    return {
+        "status": "ok",
+        "requested": requested.model_dump(),
+        "started": started.model_dump(),
+        "completed": completed.model_dump(),
+        "durationMs": duration_ms,
+        "bot": result,
+    }
