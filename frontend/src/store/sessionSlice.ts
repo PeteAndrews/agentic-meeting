@@ -1,7 +1,7 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 
 export type Condition = 'HH' | 'HA'
-export type Role = 'moderator' | 'active' | 'silent' | 'agent'
+export type Role = 'moderator' | 'active' | 'silent' | 'proxy' | 'agent'
 
 export type Session = {
   participantId: string

@@ -3,13 +3,14 @@ import { Navigate, useNavigate } from 'react-router-dom'
 
 import { apiJson } from '../api/http'
 import { JitsiEmbed } from '../components/JitsiEmbed'
+import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { clearSession } from '../store/sessionSlice'
 
 type LogEventRequest = {
   roomName: string
   participantId: string
-  role: 'moderator' | 'active' | 'silent' | 'agent'
+  role: 'moderator' | 'active' | 'silent' | 'proxy' | 'agent'
   condition: 'HH' | 'HA'
   tsMs: number
   eventType: string
@@ -19,7 +20,7 @@ type LogEventRequest = {
 type TranscriptSegmentRequest = {
   roomName: string
   participantId: string
-  role: 'moderator' | 'active' | 'silent' | 'agent'
+  role: 'moderator' | 'active' | 'silent' | 'proxy' | 'agent'
   condition: 'HH' | 'HA'
   startMs: number
   endMs: number
@@ -32,7 +33,7 @@ type SessionConfig = {
   roomName: string
   condition: 'HH' | 'HA'
   sttEnabled: boolean
-  sttRoles: Array<'moderator' | 'active' | 'silent' | 'agent'>
+  sttRoles: Array<'moderator' | 'active' | 'silent' | 'proxy' | 'agent'>
   sttLanguage: string
   sttSendInterim: boolean
   sttRequireUserClick: boolean
@@ -336,6 +337,9 @@ export function Meeting() {
   }
 
   if (!session) return <Navigate to="/" replace />
+  if (isProxyRole(session.role)) {
+    return <Navigate to={destinationForRole(session.role)} replace />
+  }
 
   return (
     <div className="page">

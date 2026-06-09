@@ -23,6 +23,8 @@ An example token registry is provided at `backend/data/token_registry.example.js
 
 To use it, copy it to `backend/data/token_registry.jsonl` before starting the API.
 
+HA tokens include `demo-ha-C` with role **`proxy`** — Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before 6A.
+
 ## Dev token convenience
 
 By default, `POST /api/resolve-token` returns 404 for unknown tokens. For quick local testing:

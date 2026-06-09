@@ -15,6 +15,7 @@ class Role(str, Enum):
     MODERATOR = "moderator"  # Person A
     ACTIVE = "active"  # Person B
     SILENT = "silent"  # Person C (HH only; muted)
+    PROXY = "proxy"  # Person C (HA only; Agent Console, no Jitsi)
     AGENT = "agent"  # embodied proxy participant (HA)
 
 

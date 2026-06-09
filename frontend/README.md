@@ -22,7 +22,15 @@ Meetings use the self-hosted Jitsi domain `meet.uib-study.com` by default (loads
 
 If you copied `backend/data/token_registry.example.jsonl` to `backend/data/token_registry.jsonl`, you can test:
 
-- `http://localhost:5173/?token=demo-hh-A`
-- `http://localhost:5173/?token=demo-hh-B`
-- `http://localhost:5173/?token=demo-hh-C` (joins muted by default)
+**HH (Human–Human):**
+
+- `http://localhost:5173/?token=demo-hh-A` → Jitsi meeting (moderator)
+- `http://localhost:5173/?token=demo-hh-B` → Jitsi meeting (active)
+- `http://localhost:5173/?token=demo-hh-C` → Jitsi meeting (silent / muted)
+
+**HA (Human–Agent):**
+
+- `http://localhost:5173/?token=demo-ha-A` → Jitsi meeting (moderator)
+- `http://localhost:5173/?token=demo-ha-B` → Jitsi meeting (active)
+- `http://localhost:5173/?token=demo-ha-C` → **Agent Console** (proxy user; does not join Jitsi)
 

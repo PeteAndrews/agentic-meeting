@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { apiJson } from '../api/http'
+import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { setSession, type Session } from '../store/sessionSlice'
 
@@ -20,7 +21,12 @@ export function Lobby() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
 
-  const canJoin = useMemo(() => !!session?.roomName, [session?.roomName])
+  const canContinue = useMemo(() => !!session?.roomName, [session?.roomName])
+
+  const continueLabel = useMemo(() => {
+    if (!session) return 'Continue'
+    return isProxyRole(session.role) ? 'Open Agent Console' : 'Join meeting'
+  }, [session])
 
   async function resolve() {
     setStatus('loading')
@@ -42,7 +48,7 @@ export function Lobby() {
     <div className="page">
       <header className="topbar">
         <div className="brand">Agentic Meeting</div>
-        <div className="tag">Phase 2: Lobby → Jitsi</div>
+        <div className="tag">Lobby → role routing</div>
       </header>
 
       <main className="card">
@@ -70,8 +76,15 @@ export function Lobby() {
           <button className="button" onClick={resolve} disabled={!token || status === 'loading'}>
             {status === 'loading' ? 'Resolving…' : 'Resolve token'}
           </button>
-          <button className="button secondary" onClick={() => navigate('/meeting')} disabled={!canJoin}>
-            Join meeting
+          <button
+            className="button secondary"
+            onClick={() => {
+              if (!session) return
+              navigate(destinationForRole(session.role))
+            }}
+            disabled={!canContinue}
+          >
+            {continueLabel}
           </button>
         </div>
 
