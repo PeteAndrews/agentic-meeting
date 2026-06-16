@@ -30,4 +30,10 @@ export const JOINED_MESSAGE = "I'm in the meeting. I'll message you here when I 
 export const JOIN_FAILED_MESSAGE =
   "I couldn't join the meeting automatically. Use Retry below and I'll try again."
 
+export const CALIBRATION_INTRO =
+  "We will now prepare for the meeting. This meeting's purpose is to finalise arrangements for a team building weekend trip. Before I join, I need to ask a few questions about your preferences for this meeting. It is important that I get your responses before joining the meeting so that I can represent you accurately."
+
+export const CALIBRATION_COMPLETE =
+  'Thank you — I have recorded your preferences. I will use these when answering questions in the meeting.'
+
 export const MIN_RECORD_SECONDS = 8

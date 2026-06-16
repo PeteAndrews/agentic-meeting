@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { apiJson } from '../api/http'
+import { apiJson, formatApiError } from '../api/http'
 import {
+  CALIBRATION_COMPLETE,
+  CALIBRATION_INTRO,
   JOIN_CONFIRM_HINT,
   JOIN_CONFIRM_QUESTION,
   JOIN_CONFIRM_WAIT,
@@ -24,8 +26,48 @@ type AgentProfile = {
   participantId: string
   voiceOutputMode: VoiceOutputMode
   voiceSampleStored: boolean
+  scenario?: string | null
+  droppedQuestionIndex?: number | null
+  calibrationAnswers?: Record<string, string>
   calibrationCompletedAt: string | null
+  interventionsUsed?: number
+  maxInterventions?: number
   updatedAt: string | null
+}
+
+type CalibrationQuestion = {
+  id: string
+  text: string
+  index: number
+}
+
+type CalibrationPlan = {
+  scenario: string
+  displayName: string
+  droppedQuestionIndex: number | null
+  questions: CalibrationQuestion[]
+  answeredQuestionIds: string[]
+  complete: boolean
+}
+
+type ScenarioDefinition = {
+  id: string
+  displayName: string
+  voiceSamplePassage?: string | null
+}
+
+type AgentPrompt = {
+  id: string
+  roomName: string
+  participantId: string
+  kind: 'proxy_question' | 'public_draft'
+  text: string
+  status: 'pending_proxy' | 'pending_approval' | 'approved' | 'rejected' | 'spoken'
+  interventionNumber: number
+  source: string
+  createdAt: string
+  updatedAt: string
+  triggerSegmentText?: string | null
 }
 
 type AgentStatus = {
@@ -49,7 +91,11 @@ type ChatLine = {
   variant?: 'passage'
 }
 
-type OnboardingStep = 'voice' | 'awaiting_join_confirm' | 'active'
+type OnboardingStep =
+  | 'voice'
+  | 'calibration_qa'
+  | 'awaiting_join_confirm'
+  | 'active'
 
 type Props = {
   session: Session
@@ -59,6 +105,22 @@ type Props = {
 
 function voiceModeLabel(mode: VoiceOutputMode): string {
   return mode === 'cloned_voice_tts' ? 'your voice sample' : 'OpenAI TTS'
+}
+
+function profileQuery(session: Session, voiceMode: VoiceOutputMode): URLSearchParams {
+  const query = new URLSearchParams({
+    roomName: session.roomName,
+    participantId: session.participantId,
+    voiceOutputMode: voiceMode,
+  })
+  if (session.scenario) query.set('scenario', session.scenario)
+  if (session.calibrationDropQuestionIndex != null) {
+    query.set('calibrationDropQuestionIndex', String(session.calibrationDropQuestionIndex))
+  }
+  if (session.maxInterventions != null) {
+    query.set('maxInterventions', String(session.maxInterventions))
+  }
+  return query
 }
 
 function TypingIndicator({ label }: { label: string }) {
@@ -93,6 +155,11 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   const [recordSeconds, setRecordSeconds] = useState(0)
   const [typingIndicator, setTypingIndicator] = useState<string | null>(null)
   const [introPlaying, setIntroPlaying] = useState(false)
+  const [calibrationPlan, setCalibrationPlan] = useState<CalibrationPlan | null>(null)
+  const [calibrationIndex, setCalibrationIndex] = useState(0)
+  const [voicePassage, setVoicePassage] = useState(VOICE_SAMPLE_PASSAGE)
+  const [prompts, setPrompts] = useState<AgentPrompt[]>([])
+  const [editDraft, setEditDraft] = useState<Record<string, string>>({})
 
   const chatEndRef = useRef<HTMLDivElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -100,8 +167,9 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   const recordTimerRef = useRef<number | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const autoJoinAttemptedRef = useRef(false)
-  const onboardingInitRef = useRef(false)
   const sequenceCancelRef = useRef(false)
+  const calibrationStartedRef = useRef(false)
+  const seenPromptIdsRef = useRef<Set<string>>(new Set())
 
   const pushAgent = useCallback((text: string, variant?: 'passage') => {
     setLines((prev) => [
@@ -143,9 +211,68 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
   const presentVoiceSampleInChat = useCallback(async () => {
     await showAgentMessage(VOICE_SAMPLE_INTRO)
-    await showAgentMessage(VOICE_SAMPLE_PASSAGE, 'passage')
+    await showAgentMessage(voicePassage, 'passage')
     setStep('voice')
-  }, [showAgentMessage])
+  }, [showAgentMessage, voicePassage])
+
+  const publishCalibrationQuestion = useCallback(
+    (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      pushAgent(trimmed)
+    },
+    [pushAgent],
+  )
+
+  const loadCalibrationPlan = useCallback(async () => {
+    const query = profileQuery(session, voiceMode)
+    return apiJson<CalibrationPlan>(`/api/agent-profile/calibration-plan?${query.toString()}`)
+  }, [session, voiceMode])
+
+  const runCalibrationSequence = useCallback(
+    async (plan: CalibrationPlan, force = false) => {
+      if (calibrationStartedRef.current && !force) return
+      calibrationStartedRef.current = true
+      sequenceCancelRef.current = false
+      setCalibrationPlan(plan)
+      setStep('calibration_qa')
+      setSaveError(null)
+
+      await showAgentMessage(CALIBRATION_INTRO)
+
+      const unanswered = plan.questions.filter((q) => !plan.answeredQuestionIds.includes(q.id))
+      if (unanswered.length === 0 && plan.complete) {
+        await showAgentMessage(CALIBRATION_COMPLETE)
+        await showAgentMessage(JOIN_CONFIRM_QUESTION)
+        await showAgentMessage(JOIN_CONFIRM_HINT)
+        setStep('awaiting_join_confirm')
+        return
+      }
+
+      setCalibrationIndex(0)
+      publishCalibrationQuestion(unanswered[0]?.text ?? '')
+    },
+    [publishCalibrationQuestion, showAgentMessage],
+  )
+
+  const resumeIncompleteCalibration = useCallback(async () => {
+    sequenceCancelRef.current = false
+    const plan = await loadCalibrationPlan()
+    setCalibrationPlan(plan)
+    calibrationStartedRef.current = true
+    const unanswered = plan.questions.filter((q) => !plan.answeredQuestionIds.includes(q.id))
+    if (unanswered.length === 0) {
+      if (plan.complete) {
+        setStep('awaiting_join_confirm')
+        return true
+      }
+      return false
+    }
+    setStep('calibration_qa')
+    publishCalibrationQuestion('We still need a few calibration answers before I can join.')
+    publishCalibrationQuestion(unanswered[0]?.text ?? '')
+    return false
+  }, [loadCalibrationPlan, publishCalibrationQuestion])
 
   const askJoinConfirm = useCallback(async () => {
     await showAgentMessage(JOIN_CONFIRM_QUESTION)
@@ -159,7 +286,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
   useEffect(() => {
     scrollChat()
-  }, [lines, typingIndicator, scrollChat])
+  }, [lines, typingIndicator, prompts, scrollChat])
 
   useEffect(() => {
     setProfile(initialProfile)
@@ -175,6 +302,30 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
       return null
     }
   }, [])
+
+  const loadPrompts = useCallback(async () => {
+    try {
+      const query = new URLSearchParams({
+        roomName: session.roomName,
+        participantId: session.participantId,
+      })
+      const result = await apiJson<{ prompts: AgentPrompt[] }>(`/api/agent/prompts?${query.toString()}`)
+      setPrompts(result.prompts)
+
+      for (const prompt of result.prompts) {
+        if (seenPromptIdsRef.current.has(prompt.id)) continue
+        if (prompt.status === 'pending_proxy') {
+          seenPromptIdsRef.current.add(prompt.id)
+          pushAgent(`I need your input before I can respond in the meeting:\n\n${prompt.text}`)
+        }
+        if (prompt.status === 'pending_approval') {
+          seenPromptIdsRef.current.add(prompt.id)
+        }
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, [pushAgent, session.participantId, session.roomName])
 
   const ensureAgentJoined = useCallback(
     async (reason: 'returning' | 'onboarding') => {
@@ -205,19 +356,13 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   )
 
   useEffect(() => {
-    if (onboardingInitRef.current) return
-    onboardingInitRef.current = true
-    sequenceCancelRef.current = false
     let cancelled = false
+    sequenceCancelRef.current = false
 
     async function init() {
       setLoadError(null)
       try {
-        const query = new URLSearchParams({
-          roomName: session.roomName,
-          participantId: session.participantId,
-          voiceOutputMode: voiceMode,
-        })
+        const query = profileQuery(session, voiceMode)
         let loaded = await apiJson<AgentProfile>(`/api/agent-profile?${query.toString()}`)
         if (cancelled) return
 
@@ -228,8 +373,39 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
               roomName: session.roomName,
               participantId: session.participantId,
               voiceOutputMode: voiceMode,
+              scenario: session.scenario,
+              droppedQuestionIndex: session.calibrationDropQuestionIndex,
+              maxInterventions: session.maxInterventions,
             }),
           })
+        } else if (
+          session.scenario &&
+          (loaded.scenario !== session.scenario ||
+            loaded.droppedQuestionIndex !== session.calibrationDropQuestionIndex)
+        ) {
+          loaded = await apiJson<AgentProfile>('/api/agent-profile', {
+            method: 'PUT',
+            body: JSON.stringify({
+              roomName: session.roomName,
+              participantId: session.participantId,
+              scenario: session.scenario,
+              droppedQuestionIndex: session.calibrationDropQuestionIndex,
+              maxInterventions: session.maxInterventions,
+            }),
+          })
+        }
+
+        const effectiveScenario = loaded.scenario ?? session.scenario
+
+        if (effectiveScenario) {
+          try {
+            const scenario = await apiJson<ScenarioDefinition>(`/api/scenarios/${effectiveScenario}`)
+            if (scenario.voiceSamplePassage) {
+              setVoicePassage(scenario.voiceSamplePassage)
+            }
+          } catch {
+            // optional scenario metadata
+          }
         }
 
         setProfile(loaded)
@@ -244,7 +420,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         }
 
         await playIntroSequence()
-        if (cancelled || sequenceCancelRef.current) return
+        if (cancelled) return
 
         if (isCloneArm && !loaded.voiceSampleStored) {
           await presentVoiceSampleInChat()
@@ -253,6 +429,12 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
         if (isCloneArm && loaded.voiceSampleStored) {
           await showAgentMessage(VOICE_SAMPLE_SAVED)
+        }
+
+        if (effectiveScenario) {
+          const plan = await loadCalibrationPlan()
+          await runCalibrationSequence(plan, true)
+          return
         }
 
         await askJoinConfirm()
@@ -266,20 +448,17 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
     void init()
     return () => {
       cancelled = true
-      sequenceCancelRef.current = true
       setTypingIndicator(null)
     }
-  }, [
-    askJoinConfirm,
-    isCloneArm,
-    onProfileChange,
-    playIntroSequence,
-    presentVoiceSampleInChat,
-    session.participantId,
-    session.roomName,
-    showAgentMessage,
-    voiceMode,
-  ])
+    // Onboarding runs once when the console chat mounts for this session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      sequenceCancelRef.current = true
+    }
+  }, [])
 
   useEffect(() => {
     if (step !== 'active' || !profile?.calibrationCompletedAt) return
@@ -307,9 +486,13 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
   useEffect(() => {
     if (step !== 'active' || !profile?.calibrationCompletedAt) return
-    const interval = setInterval(() => void loadAgentStatus(), 15_000)
+    const interval = setInterval(() => {
+      void loadAgentStatus()
+      void loadPrompts()
+    }, 5000)
+    void loadPrompts()
     return () => clearInterval(interval)
-  }, [loadAgentStatus, profile?.calibrationCompletedAt, step])
+  }, [loadAgentStatus, loadPrompts, profile?.calibrationCompletedAt, step])
 
   useEffect(() => {
     return () => {
@@ -324,6 +507,24 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   async function completeOnboarding() {
     setBusy(true)
     setSaveError(null)
+
+    const scenarioForSetup = profile?.scenario ?? session.scenario
+    if (scenarioForSetup) {
+      try {
+        const plan = await loadCalibrationPlan()
+        if (!plan.complete) {
+          setSaveError(
+            `Please answer all calibration questions first (${plan.questions.length - plan.answeredQuestionIds.length} remaining).`,
+          )
+          await resumeIncompleteCalibration()
+          return
+        }
+      } catch (e) {
+        setSaveError(formatApiError(e))
+        return
+      }
+    }
+
     pushAgent(JOINING_MESSAGE)
     try {
       const result = await apiJson<CompleteResponse>('/api/agent-profile/complete', {
@@ -348,7 +549,60 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         pushAgent(`${JOIN_FAILED_MESSAGE} (${err})`)
       }
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to complete onboarding')
+      const message = formatApiError(e)
+      setSaveError(message)
+      if (scenarioForSetup) {
+        await resumeIncompleteCalibration()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCalibrationAnswer() {
+    if (busy || introPlaying || typingIndicator || step !== 'calibration_qa' || !calibrationPlan) return
+    const reply = draft.trim()
+    if (!reply) return
+
+    const unanswered = calibrationPlan.questions.filter(
+      (q) => !calibrationPlan.answeredQuestionIds.includes(q.id),
+    )
+    const current = unanswered[calibrationIndex]
+    if (!current) return
+
+    pushUser(reply)
+    setDraft('')
+    setBusy(true)
+    setSaveError(null)
+
+    try {
+      const updated = await apiJson<AgentProfile>('/api/agent-profile/calibration-answer', {
+        method: 'POST',
+        body: JSON.stringify({
+          roomName: session.roomName,
+          participantId: session.participantId,
+          questionId: current.id,
+          answer: reply,
+        }),
+      })
+      setProfile(updated)
+      onProfileChange(updated)
+
+      const nextPlan = await loadCalibrationPlan()
+      setCalibrationPlan(nextPlan)
+      const nextUnanswered = nextPlan.questions.filter(
+        (q) => !nextPlan.answeredQuestionIds.includes(q.id),
+      )
+
+      if (nextUnanswered.length === 0 && nextPlan.complete) {
+        await showAgentMessage(CALIBRATION_COMPLETE)
+        await askJoinConfirm()
+      } else if (nextUnanswered.length > 0) {
+        setCalibrationIndex(0)
+        await showAgentMessage(nextUnanswered[0]?.text ?? '')
+      }
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to save calibration answer')
     } finally {
       setBusy(false)
     }
@@ -435,7 +689,14 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
       onProfileChange(updated)
       pushUser('Voice sample recorded.')
       await showAgentMessage(VOICE_SAMPLE_SAVED)
-      await askJoinConfirm()
+
+      if (session.scenario) {
+        const plan = await loadCalibrationPlan()
+        calibrationStartedRef.current = false
+        await runCalibrationSequence(plan)
+      } else {
+        await askJoinConfirm()
+      }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Failed to upload voice sample')
     } finally {
@@ -451,14 +712,92 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
     }
   }
 
+  async function respondToPrompt(promptId: string) {
+    const text = draft.trim()
+    if (!text) return
+    setBusy(true)
+    setSaveError(null)
+    try {
+      const query = new URLSearchParams({ roomName: session.roomName })
+      await apiJson(`/api/agent/prompts/${promptId}/respond?${query.toString()}`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      })
+      pushUser(text)
+      setDraft('')
+      await loadPrompts()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to send response')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function approvePrompt(promptId: string) {
+    setBusy(true)
+    setSaveError(null)
+    try {
+      const query = new URLSearchParams({ roomName: session.roomName })
+      await apiJson(`/api/agent/prompts/${promptId}/approve?${query.toString()}`, { method: 'POST' })
+      pushAgent('Approved — speaking in the meeting now.')
+      await loadPrompts()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to approve draft')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function editAndApprovePrompt(promptId: string) {
+    const text = (editDraft[promptId] ?? '').trim()
+    if (!text) return
+    setBusy(true)
+    setSaveError(null)
+    try {
+      const query = new URLSearchParams({ roomName: session.roomName })
+      await apiJson(`/api/agent/prompts/${promptId}/edit?${query.toString()}`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      })
+      pushAgent('Edited and approved — speaking in the meeting now.')
+      await loadPrompts()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to edit draft')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function rejectPrompt(promptId: string) {
+    setBusy(true)
+    setSaveError(null)
+    try {
+      const query = new URLSearchParams({ roomName: session.roomName })
+      await apiJson(`/api/agent/prompts/${promptId}/reject?${query.toString()}`, { method: 'POST' })
+      pushAgent('Draft rejected — I will not speak that in the meeting.')
+      await loadPrompts()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to reject draft')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (loadError) {
     return <p className="error">{loadError}</p>
   }
 
   const composerLocked = busy || introPlaying || !!typingIndicator
-  const showTextComposer = step === 'awaiting_join_confirm'
+  const showTextComposer = step === 'awaiting_join_confirm' || step === 'calibration_qa'
   const showVoiceComposer = step === 'voice'
   const showRetry = step === 'active' && !!joinError
+
+  const openProxyPrompt = prompts.find(
+    (p) => p.status === 'pending_proxy' && p.kind === 'proxy_question',
+  )
+  const openDraftPrompts = prompts.filter(
+    (p) => p.status === 'pending_approval' && p.kind === 'public_draft',
+  )
 
   return (
     <section className="agentChat">
@@ -472,6 +811,52 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
             </div>
           </div>
         ))}
+
+        {step === 'active' &&
+          openDraftPrompts.map((prompt) => (
+            <div key={prompt.id} className="calibration">
+              <div className="calibrationHeader">
+                <strong>Draft for meeting</strong>
+                <span className="pill">{prompt.source.replace(/_/g, ' ')}</span>
+              </div>
+              <div className="chatBubble">{prompt.text}</div>
+              <textarea
+                className="input chatInput"
+                rows={3}
+                value={editDraft[prompt.id] ?? prompt.text}
+                onChange={(e) =>
+                  setEditDraft((prev) => ({ ...prev, [prompt.id]: e.target.value }))
+                }
+              />
+              <div className="actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() => void approvePrompt(prompt.id)}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() => void editAndApprovePrompt(prompt.id)}
+                >
+                  Edit &amp; approve
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() => void rejectPrompt(prompt.id)}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+
         {typingIndicator && <TypingIndicator label={typingIndicator} />}
         {step === 'active' && agentStatus && (
           <div className="chatAgent">
@@ -486,32 +871,64 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
       {saveError && <p className="error">{saveError}</p>}
 
-      {showTextComposer && (
-        <div className="chatComposer">
-          <div className="choiceRow">
+      {step === 'active' && openProxyPrompt && (
+        <div className="chatComposer calibration">
+          <p className="muted">Agent C needs your answer before responding in the meeting.</p>
+          <textarea
+            className="input chatInput"
+            rows={3}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Your answer for Agent C…"
+            disabled={composerLocked}
+          />
+          <div className="actions">
             <button
               type="button"
-              className="button secondary"
-              disabled={composerLocked}
-              onClick={() => {
-                setDraft('Yes')
-                void handleJoinConfirm()
-              }}
+              className="button"
+              disabled={composerLocked || !draft.trim()}
+              onClick={() => void respondToPrompt(openProxyPrompt.id)}
             >
-              Yes
+              Send to Agent C
             </button>
           </div>
+        </div>
+      )}
+
+      {showTextComposer && (
+        <div className="chatComposer">
+          {step === 'awaiting_join_confirm' && (
+            <div className="choiceRow">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={composerLocked}
+                onClick={() => {
+                  setDraft('Yes')
+                  void handleJoinConfirm()
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          )}
           <textarea
             className="input chatInput"
             rows={2}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Reply to Agent C…"
+            placeholder={
+              step === 'calibration_qa' ? 'Type your answer…' : 'Reply to Agent C…'
+            }
             disabled={composerLocked}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                void handleJoinConfirm()
+                if (step === 'calibration_qa') {
+                  void handleCalibrationAnswer()
+                } else {
+                  void handleJoinConfirm()
+                }
               }
             }}
           />
@@ -520,7 +937,9 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
               type="button"
               className="button"
               disabled={composerLocked || !draft.trim()}
-              onClick={() => void handleJoinConfirm()}
+              onClick={() =>
+                void (step === 'calibration_qa' ? handleCalibrationAnswer() : handleJoinConfirm())
+              }
             >
               Send
             </button>

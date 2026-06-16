@@ -63,12 +63,28 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
         role = Role(rec["role"])
         condition = Condition(rec["condition"])
         voice_mode: VoiceMode | None = None
+        scenario: str | None = None
+        calibration_drop_index: int | None = None
+        max_interventions = 3
         if role == Role.PROXY:
             raw_mode = rec.get("voiceOutputMode", "generic_tts")
             if raw_mode in ("generic_tts", "cloned_voice_tts"):
                 voice_mode = raw_mode  # type: ignore[assignment]
             else:
                 voice_mode = "generic_tts"
+            raw_scenario = rec.get("scenario")
+            if isinstance(raw_scenario, str) and raw_scenario.strip():
+                scenario = raw_scenario.strip()
+            raw_drop = rec.get("calibrationDropQuestionIndex")
+            if isinstance(raw_drop, int):
+                calibration_drop_index = raw_drop
+            raw_max = rec.get("maxInterventions")
+            if isinstance(raw_max, int) and raw_max >= 1:
+                max_interventions = raw_max
+        else:
+            raw_scenario = rec.get("scenario")
+            if isinstance(raw_scenario, str) and raw_scenario.strip():
+                scenario = raw_scenario.strip()
         return ResolveTokenResponse(
             participantId=str(rec["participantId"]),
             role=role,
@@ -76,6 +92,9 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
             roomName=str(rec["roomName"]),
             displayName=str(rec.get("displayName") or rec.get("participantId") or "Participant"),
             voiceOutputMode=voice_mode,
+            scenario=scenario,
+            calibrationDropQuestionIndex=calibration_drop_index,
+            maxInterventions=max_interventions,
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Invalid token registry record: {e}") from e

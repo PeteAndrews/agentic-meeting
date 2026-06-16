@@ -6,11 +6,22 @@ __pycache__/
 venv/
 ENV/
 
+# Environment variables and secrets (never commit keys)
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
 # Backend data (keep example token registry committed)
 backend/data/events/
 backend/data/transcripts/
 backend/data/session_configs/
 backend/data/agent_profiles/
+backend/data/agent_prompts/
 backend/data/voice_samples/
 backend/data/token_registry.jsonl
 

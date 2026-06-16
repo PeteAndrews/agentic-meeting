@@ -55,7 +55,7 @@ export function Lobby() {
         <h1>Lobby</h1>
         <p className="muted">
           Paste your study token (or use <code>?token=...</code> in the URL) to get your role and room
-          assignment.
+          assignment. After changing the token, click <strong>Resolve token</strong> before continuing.
         </p>
 
         <div className="row">
@@ -115,6 +115,18 @@ export function Lobby() {
                 <>
                   <div className="k">voiceOutputMode</div>
                   <div className="v">{session.voiceOutputMode}</div>
+                </>
+              )}
+              {session.scenario && (
+                <>
+                  <div className="k">scenario</div>
+                  <div className="v">{session.scenario}</div>
+                </>
+              )}
+              {session.calibrationDropQuestionIndex != null && (
+                <>
+                  <div className="k">calibrationDropQuestionIndex</div>
+                  <div className="v">{session.calibrationDropQuestionIndex}</div>
                 </>
               )}
             </div>

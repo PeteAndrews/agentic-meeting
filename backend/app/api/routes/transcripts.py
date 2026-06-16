@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from app.domain.models import TranscriptSegmentRequest
+from app.services.agent_loop import process_transcript_update
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, read_jsonl, safe_room_slug
 
 router = APIRouter()
@@ -100,6 +101,8 @@ def log_transcript_segment(body: TranscriptSegmentRequest) -> dict[str, str]:
             **body.model_dump(),
         },
     )
+    if body.isFinal and body.condition.value == "HA":
+        process_transcript_update(body.roomName)
     return {"status": "ok"}
 
 

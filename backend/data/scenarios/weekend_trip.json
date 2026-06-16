@@ -1,0 +1,22 @@
+{
+  "id": "weekend_trip",
+  "displayName": "Weekend Trip",
+  "description": "The team is planning a weekend trip together.",
+  "discussionKeyPoints": [
+    "Destination",
+    "Date",
+    "Meeting point",
+    "Transportation",
+    "Hotel",
+    "Day 1 main activity",
+    "Day 2 main activity"
+  ],
+  "calibrationQuestions": [
+    { "id": "q0", "text": "What time does the team arrive at Heathrow airport in London?" },
+    { "id": "q1", "text": "What is the name of the hotel they are staying at?" },
+    { "id": "q2", "text": "How is the team getting from the airport to the hotel?" },
+    { "id": "q3", "text": "What time will we all meet in the hotel lobby on Day 2?" },
+    { "id": "q4", "text": "What activities are you planning on Day 2?" }
+  ],
+  "voiceSamplePassage": "I am recording this sample so Agent C can represent my voice during our weekend trip planning meeting. We will discuss destinations, travel dates, hotels, and activities for Day 1 and Day 2. I will speak clearly and at a natural pace."
+}

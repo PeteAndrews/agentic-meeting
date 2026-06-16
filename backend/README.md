@@ -25,10 +25,35 @@ To use it, copy it to `backend/data/token_registry.jsonl` before starting the AP
 
 HA tokens include:
 
-- `demo-ha-C` — role **`proxy`**, `voiceOutputMode: generic_tts` (OpenAI TTS; no voice recording)
-- `demo-ha-C-clone` — role **`proxy`**, `voiceOutputMode: cloned_voice_tts` (requires voice sample at onboarding)
+- `demo-ha-C-trip` — role **`proxy`**, `scenario: weekend_trip`, `calibrationDropQuestionIndex: 2`, `voiceOutputMode: generic_tts`
+- `demo-ha-C-trip-clone` — role **`proxy`**, clone arm for the same scenario
 
-Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before 6B.
+Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before scenarios were added.
+
+### Scenarios and calibration
+
+Each HA proxy token can set:
+
+- `scenario` — one of `weekend_trip`, `birthday_party`, `team_building_seminar`
+- `calibrationDropQuestionIndex` — `0`–`4`; that question is skipped during onboarding (study intervention #1)
+- `maxInterventions` — default `3`
+
+Scenario content (editable JSON):
+
+- `backend/data/scenarios/weekend_trip.json`
+- `backend/data/scenarios/birthday_party.json`
+- `backend/data/scenarios/team_building_seminar.json`
+
+LLM system prompt template (editable):
+
+- `backend/data/prompts/agent_system.md`
+
+API:
+
+- `GET /api/scenarios/{scenarioId}`
+- `GET /api/agent-profile/calibration-plan`
+- `POST /api/agent-profile/calibration-answer`
+- `GET /api/agent/prompts` — live approve/edit/reject queue (Phase 6C)
 
 ### Agent profile / onboarding (Phase 6B)
 

@@ -12,7 +12,12 @@ type AgentProfile = {
   participantId: string
   voiceOutputMode: VoiceOutputMode
   voiceSampleStored: boolean
+  scenario?: string | null
+  droppedQuestionIndex?: number | null
+  calibrationAnswers?: Record<string, string>
   calibrationCompletedAt: string | null
+  interventionsUsed?: number
+  maxInterventions?: number
   updatedAt: string | null
 }
 
@@ -61,6 +66,15 @@ export function AgentConsole() {
         })
         if (activeSession.voiceOutputMode) {
           query.set('voiceOutputMode', activeSession.voiceOutputMode)
+        }
+        if (activeSession.scenario) {
+          query.set('scenario', activeSession.scenario)
+        }
+        if (activeSession.calibrationDropQuestionIndex != null) {
+          query.set('calibrationDropQuestionIndex', String(activeSession.calibrationDropQuestionIndex))
+        }
+        if (activeSession.maxInterventions != null) {
+          query.set('maxInterventions', String(activeSession.maxInterventions))
         }
         const p = await apiJson<AgentProfile>(`/api/agent-profile?${query.toString()}`)
         if (!cancelled) {
@@ -115,6 +129,11 @@ export function AgentConsole() {
           <span className="pill" style={{ marginLeft: 8 }}>
             Voice: {voiceModeLabel(assignedMode)}
           </span>
+          {session.scenario && (
+            <span className="pill" style={{ marginLeft: 8 }}>
+              Scenario: {session.scenario}
+            </span>
+          )}
         </div>
         <div style={{ marginLeft: 'auto' }}>
           <button className="button secondary" disabled={leaving} onClick={() => void handleLeave()}>

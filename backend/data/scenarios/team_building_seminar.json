@@ -1,0 +1,23 @@
+{
+  "id": "team_building_seminar",
+  "displayName": "Team-Building Summer Seminar",
+  "description": "The team is planning a team-building summer seminar together.",
+  "discussionKeyPoints": [
+    "Activity: hike, camp, or beach",
+    "Location",
+    "Duration: day trip, one night two days, etc.",
+    "Date",
+    "Meeting time and place",
+    "Transport",
+    "Night activity",
+    "Hotel"
+  ],
+  "calibrationQuestions": [
+    { "id": "q0", "text": "What is the planned activity and date?" },
+    { "id": "q1", "text": "What is the transportation to the place?" },
+    { "id": "q2", "text": "Where is the meeting point and time?" },
+    { "id": "q3", "text": "What do you do at the night program?" },
+    { "id": "q4", "text": "Who will book the hotel?" }
+  ],
+  "voiceSamplePassage": "I am recording this sample so Agent C can represent my voice during our team-building seminar planning meeting. We will discuss activities, location, transport, and evening plans. I will speak clearly and at a natural pace."
+}

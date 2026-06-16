@@ -1,0 +1,22 @@
+{
+  "id": "birthday_party",
+  "displayName": "Birthday Party",
+  "description": "The team is planning a birthday party together.",
+  "discussionKeyPoints": [
+    "Date and time",
+    "Venue",
+    "Guests",
+    "Gift",
+    "Outfit theme",
+    "Food catering",
+    "Patisserie for ordering cake"
+  ],
+  "calibrationQuestions": [
+    { "id": "q0", "text": "What is the planned time and location for the party?" },
+    { "id": "q1", "text": "How many guests will be invited?" },
+    { "id": "q2", "text": "What does each guest bring for a gift?" },
+    { "id": "q3", "text": "What is the outfit theme?" },
+    { "id": "q4", "text": "Where do you order the birthday cake?" }
+  ],
+  "voiceSamplePassage": "I am recording this sample so Agent C can represent my voice during our birthday party planning meeting. We will discuss the venue, guest list, gifts, outfit theme, and catering. I will speak clearly and at a natural pace."
+}

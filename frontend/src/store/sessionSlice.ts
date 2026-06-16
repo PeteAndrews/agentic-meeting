@@ -5,6 +5,11 @@ export type Role = 'moderator' | 'active' | 'silent' | 'proxy' | 'agent'
 
 export type VoiceOutputMode = 'generic_tts' | 'cloned_voice_tts'
 
+export type StudyScenario =
+  | 'weekend_trip'
+  | 'birthday_party'
+  | 'team_building_seminar'
+
 export type Session = {
   participantId: string
   role: Role
@@ -12,6 +17,9 @@ export type Session = {
   roomName: string
   displayName: string
   voiceOutputMode?: VoiceOutputMode
+  scenario?: StudyScenario | string
+  calibrationDropQuestionIndex?: number | null
+  maxInterventions?: number
 }
 
 type SessionState = {

@@ -30,6 +30,9 @@ class ResolveTokenResponse(BaseModel):
     roomName: str
     displayName: str
     voiceOutputMode: Optional[VoiceMode] = None
+    scenario: Optional[str] = None
+    calibrationDropQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
+    maxInterventions: int = Field(default=3, ge=1, le=20)
 
 
 class SessionConfig(BaseModel):
@@ -110,7 +113,13 @@ class AgentProfile(BaseModel):
     participantId: str
     voiceOutputMode: VoiceMode = "generic_tts"
     voiceSampleStored: bool = False
+    voiceSamplePath: Optional[str] = None
+    scenario: Optional[str] = None
+    droppedQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
+    calibrationAnswers: dict[str, str] = {}
     calibrationCompletedAt: Optional[str] = None
+    interventionsUsed: int = Field(default=0, ge=0)
+    maxInterventions: int = Field(default=3, ge=1, le=20)
     updatedAt: Optional[str] = None
 
 
@@ -121,6 +130,59 @@ class AgentProfileKey(BaseModel):
 
 class AgentProfileUpdate(AgentProfileKey):
     voiceOutputMode: Optional[VoiceMode] = None
+    scenario: Optional[str] = None
+    droppedQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
+    maxInterventions: Optional[int] = Field(default=None, ge=1, le=20)
+
+
+class CalibrationQuestionView(BaseModel):
+    id: str
+    text: str
+    index: int
+
+
+class CalibrationPlanResponse(BaseModel):
+    scenario: str
+    displayName: str
+    droppedQuestionIndex: Optional[int] = None
+    questions: list[CalibrationQuestionView]
+    answeredQuestionIds: list[str]
+    complete: bool
+
+
+class CalibrationAnswerRequest(AgentProfileKey):
+    questionId: str = Field(min_length=1, max_length=32)
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+class AgentPromptStatus(str, Enum):
+    PENDING_PROXY = "pending_proxy"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SPOKEN = "spoken"
+
+
+class AgentPrompt(BaseModel):
+    id: str
+    roomName: str
+    participantId: str
+    kind: Literal["proxy_question", "public_draft"]
+    text: str
+    status: AgentPromptStatus
+    interventionNumber: int = Field(ge=0)
+    source: Literal["missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration"]
+    createdAt: str
+    updatedAt: str
+    triggerSegmentText: Optional[str] = None
+
+
+class AgentPromptRespondRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4096)
+
+
+class AgentPromptEditRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4096)
 
 
 class AgentProfileCompleteResponse(BaseModel):

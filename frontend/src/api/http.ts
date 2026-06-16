@@ -23,6 +23,24 @@ function resolveApiUrl(path: string): string {
   return `${API_BASE_URL}/${path}`
 }
 
+export function formatApiError(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return error instanceof Error ? error.message : 'Unknown error'
+  }
+  if (error.bodyText) {
+    try {
+      const parsed = JSON.parse(error.bodyText) as { detail?: string | Array<{ msg?: string }> }
+      if (typeof parsed.detail === 'string') return parsed.detail
+      if (Array.isArray(parsed.detail)) {
+        return parsed.detail.map((item) => item.msg ?? JSON.stringify(item)).join('; ')
+      }
+    } catch {
+      if (error.bodyText.trim()) return error.bodyText
+    }
+  }
+  return error.message
+}
+
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   headers.set('Content-Type', 'application/json')
