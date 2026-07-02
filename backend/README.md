@@ -9,9 +9,49 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install fastapi uvicorn pydantic
+python -m pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
+
+Requires **Python 3.10+** (3.12 recommended). The codebase uses modern type syntax (`str | None`) that FastAPI evaluates at import time.
+
+### Troubleshooting
+
+If you upgraded Python in an existing env and see `No module named 'pydantic_core._pydantic_core'`, reinstall the native wheels:
+
+```powershell
+pip install --force-reinstall --no-cache-dir -r requirements.txt
+```
+
+That error means `pydantic-core` was built for an older Python (e.g. `cp39`) than the interpreter you are running.
+
+## Environment variables
+
+Copy `backend/.env.example` to `backend/.env` and set your OpenAI key:
+
+```powershell
+cd backend
+Copy-Item .env.example .env
+# Edit .env and set OPENAI_API_KEY=sk-...
+```
+
+The API loads `backend/.env` automatically on startup. You can still override any variable in PowerShell for a single session:
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
+
+Key variables:
+
+- `OPENAI_API_KEY` — required for TTS and agent LLM
+- `AGENT_LLM_MODEL` — default `gpt-5-nano`
+- `TTS_VOICE_MALE` / `TTS_VOICE_FEMALE` — OpenAI voices for HA generic TTS (`onyx` / `nova` by default)
+- `AGENT_TRIGGER_PHRASES` — default wake phrase list (comma-separated); per-token override via `agentTriggerPhrases`
+- `AGENT_TRANSCRIPT_MAX_CHARS` — transcript budget for the agent LLM (default `12000`)
+- `AGENT_ROUTING_TRANSCRIPT_MAX_CHARS` — smaller transcript budget for routing LLM calls (default `2500`)
+- `AGENT_CALIBRATION_TRANSCRIPT_MAX_CHARS` — transcript budget when calibration polish is on (default `2000`)
+- `AGENT_LLM_MAX_TOKENS` — cap on LLM reply length for routing/polish (default `200`)
+- `AGENT_CALIBRATION_LLM_POLISH` — set `true` to run an extra LLM pass on calibration replies (default `false`; template-only is faster)
 
 ## Data storage
 
@@ -25,8 +65,9 @@ To use it, copy it to `backend/data/token_registry.jsonl` before starting the AP
 
 HA tokens include:
 
-- `demo-ha-C-trip` — role **`proxy`**, `scenario: weekend_trip`, `calibrationDropQuestionIndex: 2`, `voiceOutputMode: generic_tts`
-- `demo-ha-C-trip-clone` — role **`proxy`**, clone arm for the same scenario
+- `demo-ha-C-trip` — role **`proxy`**, `scenario: weekend_trip`, `calibrationDropQuestionIndex: 2`, `voiceOutputMode: generic_tts`, `ttsVoiceGender: female`, wake phrase `echo`
+- `demo-ha-C-trip-male` — same scenario with `ttsVoiceGender: male`
+- `demo-ha-C-trip-clone` — role **`proxy`**, clone arm for the same scenario (TTS speak fails until Phase 5D)
 
 Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before scenarios were added.
 
@@ -37,6 +78,9 @@ Each HA proxy token can set:
 - `scenario` — one of `weekend_trip`, `birthday_party`, `team_building_seminar`
 - `calibrationDropQuestionIndex` — `0`–`4`; that question is skipped during onboarding (study intervention #1)
 - `maxInterventions` — default `3`
+- `agentTriggerPhrases` — wake phrases for the embodied agent (default `["echo"]`)
+- `agentDisplayName` — Jitsi / console name (default `Echo`)
+- `ttsVoiceGender` — `male` or `female` for `generic_tts` (maps to OpenAI `onyx` / `nova`)
 
 Scenario content (editable JSON):
 
@@ -62,7 +106,7 @@ Proxy users complete a short onboarding in the Agent Console. Profiles are store
 - `GET /api/agent-profile?roomName=...&participantId=...&voiceOutputMode=...`
 - `PUT /api/agent-profile`
 - `POST /api/agent-profile/voice-sample` (clone arm only)
-- `POST /api/agent-profile/complete` — marks onboarding done and **auto-joins Agent C** in the room
+- `POST /api/agent-profile/complete` — marks onboarding done and **auto-joins Echo** in the room
 
 `voiceOutputMode` is pre-assigned on the proxy token and returned from `POST /api/resolve-token`.
 
@@ -92,19 +136,16 @@ $env:AGENT_BOT_BASE_URL="http://127.0.0.1:3001"
 
 ### TTS (Phase 5C)
 
-`POST /api/agent/speak` accepts `{ "roomName": "am-demo-ha", "text": "Hello everyone." }` and uses OpenAI speech synthesis before forwarding PCM audio to `agent-bot`.
+`POST /api/agent/speak` accepts `{ "roomName": "am-demo-ha", "text": "Hello everyone." }` and uses OpenAI speech synthesis before forwarding PCM audio to `agent-bot`. Voice gender is resolved from the proxy token's `ttsVoiceGender` when a profile exists for the room.
 
-Required:
+Set `OPENAI_API_KEY` in `backend/.env` (see above).
 
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-```
+Optional overrides in `.env`:
 
-Optional:
-
-```powershell
-$env:TTS_VOICE="alloy"   # OpenAI voice name
-$env:TTS_MODEL="tts-1"
+```env
+TTS_VOICE_MALE=onyx
+TTS_VOICE_FEMALE=nova
+TTS_MODEL=tts-1
 ```
 
 Example:
@@ -112,7 +153,7 @@ Example:
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
   -ContentType "application/json" `
-  -Body '{"roomName":"am-demo-ha","text":"Hello, this is Agent C speaking through TTS."}' `
+  -Body '{"roomName":"am-demo-ha","text":"Hello, this is Echo speaking through TTS."}' `
   -TimeoutSec 180
 ```
 
@@ -121,5 +162,6 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
 1. Start backend, agent-bot, and frontend.
 2. Person A joins Jitsi with `demo-ha-A` (moderator should be in the room first).
 3. Person B joins with `demo-ha-B`.
-4. Person C opens Agent Console with `demo-ha-C` or `demo-ha-C-clone`.
-5. C completes onboarding; Agent C joins automatically when onboarding finishes.
+4. Person C opens Agent Console with `demo-ha-C-trip` or `demo-ha-C-trip-clone`.
+5. C completes onboarding; Echo joins automatically when onboarding finishes.
+6. In the meeting, A or B must say **Echo** in the same utterance to trigger a draft or proxy question.

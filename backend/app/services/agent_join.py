@@ -71,7 +71,7 @@ def _persist_event(event: LogEventRequest) -> None:
 
 
 def join_agent_room(room_name: str, display_name: str | None = None) -> dict[str, Any]:
-    name = display_name or "Agent C"
+    name = display_name or "Echo"
     event = _backend_event(room_name, "agent.join_requested", {"displayName": name})
     _persist_event(event)
     result = _post_json("/bot/join", {"roomName": room_name, "displayName": name}, timeout=90)

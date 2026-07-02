@@ -25,6 +25,7 @@ from app.services.agent_store import (
     update_prompt,
 )
 from app.services.agent_loop import create_draft_from_proxy_reply
+from app.services.agent_speak import AgentSpeakError, speak_for_profile, speak_in_room
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
@@ -77,25 +78,21 @@ def _get_prompt(room_name: str, prompt_id: str) -> AgentPrompt:
     raise HTTPException(status_code=404, detail="Prompt not found")
 
 
-def _speak_approved_text(room_name: str, text: str, voice_mode: str) -> None:
-    from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
-    import base64
-
+def _speak_approved_text(
+    room_name: str,
+    text: str,
+    voice_mode: str,
+    voice_gender: str | None = None,
+) -> None:
     try:
-        pcm, sample_rate = synthesize_speech(text, voice_mode=voice_mode)  # type: ignore[arg-type]
-    except TtsError as exc:
+        speak_in_room(
+            room_name,
+            text,
+            voice_mode=voice_mode,  # type: ignore[arg-type]
+            voice_gender=voice_gender,  # type: ignore[arg-type]
+        )
+    except AgentSpeakError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    duration_ms = pcm_duration_ms(pcm, sample_rate)
-    bot_payload = {
-        "roomName": room_name,
-        "audioBase64": base64.b64encode(pcm).decode("ascii"),
-        "sampleRate": sample_rate,
-        "durationMs": duration_ms,
-        "text": text,
-    }
-    timeout = max(120.0, duration_ms / 1000.0 + 90.0)
-    _post_json("/bot/speak", bot_payload, timeout=timeout)
 
 
 @router.get("/agent/prompts")
@@ -142,6 +139,7 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
         prompt.participantId,
         proxy_reply=body.text,
         source=prompt.source,
+        trigger_segment_text=prompt.triggerSegmentText,
     )
     _persist_event(roomName, "agent.prompt_proxy_answered", {"promptId": prompt_id, "draftId": draft.id})
     return {"status": "ok", "prompt": updated.model_dump(), "draft": draft.model_dump()}
@@ -155,8 +153,9 @@ def approve_prompt(prompt_id: str, roomName: str = Query(min_length=1)) -> dict[
 
     profile = load_proxy_profile(roomName, prompt.participantId)
     voice_mode = profile.voiceOutputMode if profile else "generic_tts"
+    voice_gender = profile.ttsVoiceGender if profile else None
 
-    _speak_approved_text(roomName, prompt.text, voice_mode)
+    _speak_approved_text(roomName, prompt.text, voice_mode, voice_gender)
     updated = update_prompt(roomName, prompt_id, status=AgentPromptStatus.SPOKEN)
     _persist_event(roomName, "agent.prompt_approved", {"promptId": prompt_id, "text": prompt.text})
     return {"status": "ok", "prompt": updated.model_dump() if updated else None}
@@ -174,8 +173,9 @@ def edit_and_approve_prompt(
 
     profile = load_proxy_profile(roomName, prompt.participantId)
     voice_mode = profile.voiceOutputMode if profile else "generic_tts"
+    voice_gender = profile.ttsVoiceGender if profile else None
 
-    _speak_approved_text(roomName, body.text, voice_mode)
+    _speak_approved_text(roomName, body.text, voice_mode, voice_gender)
     updated = update_prompt(roomName, prompt_id, status=AgentPromptStatus.SPOKEN, text=body.text)
     _persist_event(roomName, "agent.prompt_edited", {"promptId": prompt_id, "text": body.text})
     return {"status": "ok", "prompt": updated.model_dump() if updated else None}

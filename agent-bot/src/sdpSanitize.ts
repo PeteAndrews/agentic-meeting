@@ -63,6 +63,9 @@ function shouldDropAttributeLine(line: string): boolean {
   if (/^a=rid:/i.test(line)) {
     return true;
   }
+  if (/^a=extmap-allow-mixed/i.test(line)) {
+    return true;
+  }
   if (/^a=extmap:\d+\s+urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id/i.test(line)) {
     return true;
   }
@@ -75,7 +78,23 @@ function shouldDropAttributeLine(line: string): boolean {
   if (/^a=fmtp:\d+\s+\./i.test(line)) {
     return true;
   }
+  if (/^a=ssrc-group:/i.test(line)) {
+    return true;
+  }
+  if (/^a=ssrc:\d+\s+cname:/i.test(line)) {
+    return true;
+  }
+  if (/^a=ssrc:\d+\s+mslabel:/i.test(line)) {
+    return true;
+  }
+  if (/^a=ssrc:\d+\s+label:/i.test(line)) {
+    return true;
+  }
   return false;
+}
+
+function isRecognizedSdpLine(line: string): boolean {
+  return /^(v=|o=|s=|i=|u=|e=|p=|c=|b=|t=|r=|z=|k=|a=|m=)/.test(line);
 }
 
 function collectDtlsIceLines(lines: string[]): string[] {
@@ -224,8 +243,8 @@ export function sanitizeSdpForNodeWebrtc(sdp: string): string {
 
   let lines = sdp
     .split(/\r?\n/)
-    .filter((line) => line.length > 0 || line === "")
-    .map(normalizeKnownBadLines);
+    .map(normalizeKnownBadLines)
+    .filter((line) => line.length > 0 && isRecognizedSdpLine(line));
   const dtlsIceLines = collectDtlsIceLines(lines);
 
   lines = keepFirstAudioMediaSection(lines);
@@ -261,6 +280,9 @@ export function sanitizeSdpForNodeWebrtc(sdp: string): string {
     }
     const head = parts.slice(0, 3);
     const payloads = parts.slice(3).filter((pt) => !stripPts.has(pt));
+    if (payloads.length === 0) {
+      return line;
+    }
     return [...head, ...payloads].join(" ");
   });
 

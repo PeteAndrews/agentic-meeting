@@ -86,6 +86,9 @@ def _init_scenario_from_query(
     scenario: str | None,
     drop_index: int | None,
     max_interventions: int | None,
+    agent_trigger_phrases: list[str] | None = None,
+    agent_display_name: str | None = None,
+    tts_voice_gender: str | None = None,
 ) -> AgentProfile:
     patch: dict[str, Any] = {"updatedAt": now_iso()}
     if scenario and not profile.scenario:
@@ -95,6 +98,12 @@ def _init_scenario_from_query(
         patch["droppedQuestionIndex"] = drop_index
     if max_interventions is not None:
         patch["maxInterventions"] = max_interventions
+    if agent_trigger_phrases:
+        patch["agentTriggerPhrases"] = agent_trigger_phrases
+    if agent_display_name:
+        patch["agentDisplayName"] = agent_display_name
+    if tts_voice_gender in ("male", "female"):
+        patch["ttsVoiceGender"] = tts_voice_gender
     if len(patch) == 1:
         return profile
     return profile.model_copy(update=patch)
@@ -131,8 +140,15 @@ def get_agent_profile(
     voiceOutputMode: str | None = Query(default=None),
     scenario: str | None = Query(default=None),
     calibrationDropQuestionIndex: int | None = Query(default=None, ge=0, le=20),
-    maxInterventions: int | None = Query(default=None, ge=1, le=20),
+    maxInterventions: int | None = Query(default=None, ge=1, le=9999),
+    agentTriggerPhrases: str | None = Query(default=None),
+    agentDisplayName: str | None = Query(default=None),
+    ttsVoiceGender: str | None = Query(default=None),
 ) -> AgentProfile:
+    trigger_phrases: list[str] | None = None
+    if agentTriggerPhrases:
+        trigger_phrases = [p.strip() for p in agentTriggerPhrases.split(",") if p.strip()]
+
     profile = load_profile(roomName, participantId)
     if profile:
         updated = _init_scenario_from_query(
@@ -140,6 +156,9 @@ def get_agent_profile(
             scenario=scenario,
             drop_index=calibrationDropQuestionIndex,
             max_interventions=maxInterventions,
+            agent_trigger_phrases=trigger_phrases,
+            agent_display_name=agentDisplayName,
+            tts_voice_gender=ttsVoiceGender,
         )
         if updated != profile:
             profile = save_profile(updated)
@@ -151,6 +170,9 @@ def get_agent_profile(
         scenario=scenario,
         drop_index=calibrationDropQuestionIndex,
         max_interventions=maxInterventions,
+        agent_trigger_phrases=trigger_phrases,
+        agent_display_name=agentDisplayName,
+        tts_voice_gender=ttsVoiceGender,
     )
     return save_profile(created)
 
@@ -182,14 +204,24 @@ def get_calibration_plan(
     participantId: str = Query(min_length=1, max_length=128),
     scenario: str | None = Query(default=None),
     calibrationDropQuestionIndex: int | None = Query(default=None, ge=0, le=20),
-    maxInterventions: int | None = Query(default=None, ge=1, le=20),
+    maxInterventions: int | None = Query(default=None, ge=1, le=9999),
+    agentTriggerPhrases: str | None = Query(default=None),
+    agentDisplayName: str | None = Query(default=None),
+    ttsVoiceGender: str | None = Query(default=None),
 ) -> CalibrationPlanResponse:
+    trigger_phrases: list[str] | None = None
+    if agentTriggerPhrases:
+        trigger_phrases = [p.strip() for p in agentTriggerPhrases.split(",") if p.strip()]
+
     profile = load_profile(roomName, participantId) or _default_profile(roomName, participantId)
     profile = _init_scenario_from_query(
         profile,
         scenario=scenario,
         drop_index=calibrationDropQuestionIndex,
         max_interventions=maxInterventions,
+        agent_trigger_phrases=trigger_phrases,
+        agent_display_name=agentDisplayName,
+        tts_voice_gender=ttsVoiceGender,
     )
     profile = save_profile(profile)
     if profile.droppedQuestionIndex is not None:
@@ -315,7 +347,7 @@ def complete_calibration(body: AgentProfileKey) -> AgentProfileCompleteResponse:
     agent_join_error: str | None = None
     agent_join: dict[str, Any] | None = None
     try:
-        agent_join = join_agent_room(body.roomName)
+        agent_join = join_agent_room(body.roomName, saved.agentDisplayName)
         agent_join_ok = True
         _persist_proxy_event(body.roomName, body.participantId, "proxy.agent_auto_joined", {"status": "ok"})
     except HTTPException as exc:

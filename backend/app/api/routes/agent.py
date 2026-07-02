@@ -21,6 +21,7 @@ from app.domain.models import (
     Role,
 )
 from app.services.agent_join import join_agent_room
+from app.services.agent_store import find_proxy_profile_for_room
 from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
@@ -144,7 +145,13 @@ def agent_speak(body: AgentSpeakRequest) -> dict[str, Any]:
     _persist_event(requested)
 
     try:
-        pcm, sample_rate = synthesize_speech(body.text, voice_mode=body.voiceMode)
+        profile = find_proxy_profile_for_room(body.roomName)
+        voice_gender = profile.ttsVoiceGender if profile else None
+        pcm, sample_rate = synthesize_speech(
+            body.text,
+            voice_mode=body.voiceMode,
+            voice_gender=voice_gender,
+        )
     except TtsError as exc:
         failed = _backend_event(body.roomName, "agent.speak_failed", {"error": str(exc)})
         _persist_event(failed)

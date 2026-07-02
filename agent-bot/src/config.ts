@@ -12,7 +12,7 @@ export const config = {
   /** BOSH fallback when WebSocket cannot connect. */
   jitsiBoshUrl: process.env.JITSI_BOSH_URL ?? `https://${jitsiDomain}/http-bind`,
   backendUrl: process.env.AGENT_BOT_BACKEND_URL ?? "http://127.0.0.1:8000",
-  defaultDisplayName: process.env.AGENT_DISPLAY_NAME ?? "Agent C",
+  defaultDisplayName: process.env.AGENT_DISPLAY_NAME ?? "Echo",
   fakeJitsi: (process.env.AGENT_BOT_FAKE_JITSI ?? "false").toLowerCase() === "true",
   connectionTimeoutMs: Number(process.env.AGENT_BOT_CONNECT_TIMEOUT_MS ?? 35000),
   conferenceJoinTimeoutMs: Number(process.env.AGENT_BOT_CONFERENCE_TIMEOUT_MS ?? 35000),

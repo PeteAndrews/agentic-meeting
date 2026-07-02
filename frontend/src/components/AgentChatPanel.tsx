@@ -120,6 +120,15 @@ function profileQuery(session: Session, voiceMode: VoiceOutputMode): URLSearchPa
   if (session.maxInterventions != null) {
     query.set('maxInterventions', String(session.maxInterventions))
   }
+  if (session.agentTriggerPhrases?.length) {
+    query.set('agentTriggerPhrases', session.agentTriggerPhrases.join(','))
+  }
+  if (session.agentDisplayName) {
+    query.set('agentDisplayName', session.agentDisplayName)
+  }
+  if (session.ttsVoiceGender) {
+    query.set('ttsVoiceGender', session.ttsVoiceGender)
+  }
   return query
 }
 
@@ -139,6 +148,7 @@ function TypingIndicator({ label }: { label: string }) {
 }
 
 export function AgentChatPanel({ session, initialProfile, onProfileChange }: Props) {
+  const agentName = session.agentDisplayName ?? 'Echo'
   const voiceMode = session.voiceOutputMode ?? initialProfile?.voiceOutputMode ?? 'generic_tts'
   const isCloneArm = voiceMode === 'cloned_voice_tts'
   const [profile, setProfile] = useState<AgentProfile | null>(initialProfile)
@@ -190,7 +200,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   const showAgentMessage = useCallback(
     async (text: string, variant?: 'passage') => {
       if (sequenceCancelRef.current) return
-      setTypingIndicator(randomTypingLabel())
+      setTypingIndicator(randomTypingLabel(agentName))
       await wait(randomBetween(700, 1800))
       if (sequenceCancelRef.current) return
       setTypingIndicator(null)
@@ -316,10 +326,26 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         if (seenPromptIdsRef.current.has(prompt.id)) continue
         if (prompt.status === 'pending_proxy') {
           seenPromptIdsRef.current.add(prompt.id)
-          pushAgent(`I need your input before I can respond in the meeting:\n\n${prompt.text}`)
+          const meetingLine = prompt.triggerSegmentText
+            ? `In the meeting, someone asked:\n"${prompt.triggerSegmentText}"`
+            : ''
+          pushAgent(
+            [
+              meetingLine,
+              prompt.text ? `I need your input before I can respond:\n\n${prompt.text}` : '',
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+          )
         }
         if (prompt.status === 'pending_approval') {
           seenPromptIdsRef.current.add(prompt.id)
+          if (prompt.kind === 'public_draft') {
+            const meetingLine = prompt.triggerSegmentText
+              ? `Draft to speak in the meeting (re: "${prompt.triggerSegmentText}")`
+              : 'Draft to speak in the meeting'
+            pushAgent(`${meetingLine}:\n\n${prompt.text}`)
+          }
         }
       }
     } catch {
@@ -334,7 +360,10 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
       try {
         await apiJson('/api/agent/join', {
           method: 'POST',
-          body: JSON.stringify({ roomName: session.roomName, displayName: 'Agent C' }),
+          body: JSON.stringify({
+            roomName: session.roomName,
+            displayName: agentName,
+          }),
         })
         await loadAgentStatus()
         if (reason === 'returning') {
@@ -352,7 +381,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         setJoinBusy(false)
       }
     },
-    [loadAgentStatus, pushAgent, session.roomName],
+    [loadAgentStatus, pushAgent, session.roomName, agentName],
   )
 
   useEffect(() => {
@@ -819,6 +848,11 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
                 <strong>Draft for meeting</strong>
                 <span className="pill">{prompt.source.replace(/_/g, ' ')}</span>
               </div>
+              {prompt.triggerSegmentText && (
+                <p className="muted" style={{ marginBottom: 8 }}>
+                  Re: "{prompt.triggerSegmentText}"
+                </p>
+              )}
               <div className="chatBubble">{prompt.text}</div>
               <textarea
                 className="input chatInput"
@@ -873,13 +907,25 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
 
       {step === 'active' && openProxyPrompt && (
         <div className="chatComposer calibration">
-          <p className="muted">Agent C needs your answer before responding in the meeting.</p>
+          <p className="muted">{agentName} needs your answer before responding in the meeting.</p>
+          {openProxyPrompt.triggerSegmentText && (
+            <div className="chatBubble" style={{ marginBottom: 12 }}>
+              <strong>In the meeting:</strong>
+              <div>"{openProxyPrompt.triggerSegmentText}"</div>
+            </div>
+          )}
+          {openProxyPrompt.text && (
+            <div className="chatBubble" style={{ marginBottom: 12 }}>
+              <strong>{agentName} asks:</strong>
+              <div>{openProxyPrompt.text}</div>
+            </div>
+          )}
           <textarea
             className="input chatInput"
             rows={3}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Your answer for Agent C…"
+            placeholder={`Your answer for ${agentName}…`}
             disabled={composerLocked}
           />
           <div className="actions">
@@ -889,7 +935,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
               disabled={composerLocked || !draft.trim()}
               onClick={() => void respondToPrompt(openProxyPrompt.id)}
             >
-              Send to Agent C
+              Send to {agentName}
             </button>
           </div>
         </div>
@@ -918,7 +964,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={
-              step === 'calibration_qa' ? 'Type your answer…' : 'Reply to Agent C…'
+              step === 'calibration_qa' ? 'Type your answer…' : `Reply to ${agentName}…`
             }
             disabled={composerLocked}
             onKeyDown={(e) => {

@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Literal
 
-from app.domain.models import AgentProfile, AgentPrompt, AgentPromptStatus
-from app.services.agent_llm import AgentLlmError, evaluate_meeting_turn
+from app.domain.models import AgentProfile, AgentPrompt, AgentPromptStatus, Condition, LogEventRequest, Role
+from app.services.agent_llm import (
+    AgentLlmError,
+    evaluate_meeting_turn,
+    format_calibration_speech,
+    format_meeting_acknowledgment,
+    format_proxy_console_message,
+)
 from app.services.agent_store import (
     find_proxy_profile_for_room,
     has_open_prompt,
-    load_prompts,
     new_prompt_id,
     save_prompt,
 )
+from app.services.calibration_matcher import resolve_calibration_answer
+from app.services.meeting_meta_matcher import find_meeting_meta_reply
+from app.services.agent_speak import AgentSpeakError, speak_for_profile
+from app.services.agent_trigger import match_trigger, resolve_trigger_phrases
 from app.services.scenario_loader import load_scenario
 from app.storage.jsonl import now_iso, read_jsonl, safe_room_slug
 from app.storage.jsonl import data_dir
@@ -19,9 +28,30 @@ from app.storage.jsonl import data_dir
 _lock = threading.Lock()
 _last_processed: dict[str, int] = {}
 
+AutoSpeakSource = Literal["known_calibration", "meeting_meta"]
+
 
 def _segments_path(room_name: str):
     return data_dir() / "transcripts" / f"{safe_room_slug(room_name)}.segments.jsonl"
+
+
+def _events_path(room_name: str):
+    return data_dir() / "events" / f"{safe_room_slug(room_name)}.events.jsonl"
+
+
+def _persist_agent_event(room_name: str, event_type: str, payload: dict[str, Any]) -> None:
+    from app.storage.jsonl import append_jsonl
+
+    event = LogEventRequest(
+        roomName=room_name,
+        participantId="echo",
+        role=Role.AGENT,
+        condition=Condition.HA,
+        tsMs=int(__import__("time").time() * 1000),
+        eventType=event_type,
+        payload={"loggedAt": now_iso(), **payload},
+    )
+    append_jsonl(_events_path(room_name), {"loggedAt": now_iso(), **event.model_dump()})
 
 
 def _load_final_segments(room_name: str) -> list[dict[str, Any]]:
@@ -60,13 +90,110 @@ def _should_process(room_name: str, segments: list[dict[str, Any]]) -> bool:
 
 
 def _infer_source(profile: AgentProfile, llm_source: str | None) -> str:
-    if llm_source in ("missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration"):
+    if llm_source in (
+        "missing_calibration",
+        "novel_topic",
+        "moderator_disagreement",
+        "known_calibration",
+        "meeting_meta",
+    ):
         return llm_source
     return "novel_topic"
 
 
-def _is_intervention_action(action: str, source: str) -> bool:
-    return action == "ask_proxy" or source in ("missing_calibration", "novel_topic", "moderator_disagreement")
+def _auto_speak_prompt(
+    room_name: str,
+    profile: AgentProfile,
+    *,
+    spoken: str,
+    trigger_text: str,
+    source: AutoSpeakSource,
+    now: str,
+    event_payload: dict[str, Any] | None = None,
+) -> AgentPrompt | None:
+    try:
+        duration_ms = speak_for_profile(room_name, profile, spoken)
+    except AgentSpeakError as exc:
+        _persist_agent_event(
+            room_name,
+            "agent.speak_failed",
+            {"error": str(exc), "text": spoken, "participantId": profile.participantId},
+        )
+        return None
+
+    prompt = AgentPrompt(
+        id=new_prompt_id(),
+        roomName=room_name,
+        participantId=profile.participantId,
+        kind="public_draft",
+        text=spoken,
+        status=AgentPromptStatus.SPOKEN,
+        interventionNumber=0,
+        source=source,  # type: ignore[arg-type]
+        createdAt=now,
+        updatedAt=now,
+        triggerSegmentText=trigger_text,
+    )
+    saved = save_prompt(room_name, prompt)
+    _persist_agent_event(
+        room_name,
+        "agent.auto_spoken",
+        {
+            "text": spoken,
+            "durationMs": duration_ms,
+            "promptId": saved.id,
+            "source": source,
+            "participantId": profile.participantId,
+            **(event_payload or {}),
+        },
+    )
+    return saved
+
+
+def _submit_proxy_question(
+    room_name: str,
+    profile: AgentProfile,
+    *,
+    trigger_text: str,
+    console_detail: str,
+    source: str,
+    reason: str | None,
+    now: str,
+) -> AgentPrompt:
+    ack = format_meeting_acknowledgment(profile)
+    try:
+        ack_duration_ms = speak_for_profile(room_name, profile, ack)
+        _persist_agent_event(
+            room_name,
+            "agent.ack_spoken",
+            {
+                "text": ack,
+                "durationMs": ack_duration_ms,
+                "participantId": profile.participantId,
+            },
+        )
+    except AgentSpeakError as exc:
+        _persist_agent_event(
+            room_name,
+            "agent.ack_speak_failed",
+            {"error": str(exc), "text": ack, "participantId": profile.participantId},
+        )
+
+    proxy_text = format_proxy_console_message(trigger_text, console_detail, reason=reason)
+    prompt = AgentPrompt(
+        id=new_prompt_id(),
+        roomName=room_name,
+        participantId=profile.participantId,
+        kind="proxy_question",
+        text=proxy_text,
+        status=AgentPromptStatus.PENDING_PROXY,
+        interventionNumber=profile.interventionsUsed + 1,
+        source=source,  # type: ignore[arg-type]
+        createdAt=now,
+        updatedAt=now,
+        triggerSegmentText=trigger_text,
+    )
+    return save_prompt(room_name, prompt)
 
 
 def process_transcript_update(room_name: str) -> AgentPrompt | None:
@@ -85,53 +212,159 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
     if not trigger_text:
         return None
 
-    try:
-        llm_result = evaluate_meeting_turn(profile, segments)
-    except AgentLlmError:
+    phrases = resolve_trigger_phrases(profile)
+    matched_phrase = match_trigger(trigger_text, phrases)
+    if not matched_phrase:
+        _persist_agent_event(
+            room_name,
+            "agent.trigger_missed",
+            {
+                "text": trigger_text,
+                "phrases": phrases,
+                "participantId": last_seg.get("participantId"),
+            },
+        )
         return None
+
+    _persist_agent_event(
+        room_name,
+        "agent.trigger_detected",
+        {
+            "text": trigger_text,
+            "phrases": phrases,
+            "matchedPhrase": matched_phrase,
+            "participantId": last_seg.get("participantId"),
+        },
+    )
+
+    now = now_iso()
+    calibration_hit = resolve_calibration_answer(profile, trigger_text)
+    if calibration_hit:
+        question, answer, match_method = calibration_hit
+        try:
+            spoken = format_calibration_speech(
+                profile,
+                trigger_text=trigger_text,
+                question_text=question.text,
+                raw_answer=answer,
+                question_id=question.id,
+                segments=segments,
+                trigger_index=len(segments) - 1,
+            )
+        except AgentLlmError:
+            spoken = answer
+        event_payload: dict[str, Any] = {
+            "rawAnswer": answer,
+            "calibrationQuestionId": question.id,
+            "matchMethod": match_method,
+        }
+        if match_method == "semantic":
+            _persist_agent_event(
+                room_name,
+                "agent.calibration_semantic_match",
+                {
+                    "text": trigger_text,
+                    "questionId": question.id,
+                    "participantId": profile.participantId,
+                },
+            )
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=spoken,
+            trigger_text=trigger_text,
+            source="known_calibration",
+            now=now,
+            event_payload=event_payload,
+        )
+
+    meta_reply = find_meeting_meta_reply(trigger_text)
+    if meta_reply:
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=meta_reply,
+            trigger_text=trigger_text,
+            source="meeting_meta",
+            now=now,
+            event_payload={"metaKind": "deterministic"},
+        )
+
+    try:
+        llm_result = evaluate_meeting_turn(
+            profile,
+            segments,
+            trigger_index=len(segments) - 1,
+            wake_phrase_detected=True,
+        )
+    except AgentLlmError as exc:
+        _persist_agent_event(
+            room_name,
+            "agent.llm_error",
+            {"error": str(exc), "participantId": profile.participantId},
+        )
+        return _submit_proxy_question(
+            room_name,
+            profile,
+            trigger_text=trigger_text,
+            console_detail="How would you like me to answer this in the meeting?",
+            source="novel_topic",
+            reason="Routing could not run; please reply so Echo can respond.",
+            now=now,
+        )
 
     action = str(llm_result.get("action", "wait"))
     text = str(llm_result.get("text") or "").strip()
     source = _infer_source(profile, llm_result.get("source"))
+    reason = str(llm_result.get("reason") or "").strip() or None
+
     if action == "wait" or not text:
+        _persist_agent_event(
+            room_name,
+            "agent.llm_wait",
+            {
+                "action": action,
+                "reason": llm_result.get("reason"),
+                "participantId": profile.participantId,
+            },
+        )
         return None
 
-    now = now_iso()
-    if action == "ask_proxy":
-        if profile.interventionsUsed >= profile.maxInterventions:
-            return None
-        prompt = AgentPrompt(
-            id=new_prompt_id(),
-            roomName=room_name,
-            participantId=profile.participantId,
-            kind="proxy_question",
-            text=text,
-            status=AgentPromptStatus.PENDING_PROXY,
-            interventionNumber=profile.interventionsUsed + 1,
+    if action == "draft_public" and source in ("known_calibration", "meeting_meta"):
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=text,
+            trigger_text=trigger_text,
             source=source,  # type: ignore[arg-type]
-            createdAt=now,
-            updatedAt=now,
-            triggerSegmentText=trigger_text,
+            now=now,
+            event_payload={"metaKind": "llm"},
         )
-        return save_prompt(room_name, prompt)
 
     if action == "draft_public":
-        prompt = AgentPrompt(
-            id=new_prompt_id(),
-            roomName=room_name,
-            participantId=profile.participantId,
-            kind="public_draft",
-            text=text,
-            status=AgentPromptStatus.PENDING_APPROVAL,
-            interventionNumber=0,
-            source=source,  # type: ignore[arg-type]
-            createdAt=now,
-            updatedAt=now,
-            triggerSegmentText=trigger_text,
-        )
-        return save_prompt(room_name, prompt)
+        source = "novel_topic"
 
-    return None
+    if action != "ask_proxy":
+        _persist_agent_event(
+            room_name,
+            "agent.llm_wait",
+            {
+                "action": action,
+                "reason": llm_result.get("reason"),
+                "participantId": profile.participantId,
+            },
+        )
+        return None
+
+    return _submit_proxy_question(
+        room_name,
+        profile,
+        trigger_text=trigger_text,
+        console_detail=text,
+        source=source,
+        reason=reason,
+        now=now,
+    )
 
 
 def create_draft_from_proxy_reply(
@@ -140,6 +373,7 @@ def create_draft_from_proxy_reply(
     *,
     proxy_reply: str,
     source: str,
+    trigger_segment_text: str | None = None,
 ) -> AgentPrompt:
     now = now_iso()
     prompt = AgentPrompt(
@@ -153,6 +387,7 @@ def create_draft_from_proxy_reply(
         source=source,  # type: ignore[arg-type]
         createdAt=now,
         updatedAt=now,
+        triggerSegmentText=trigger_segment_text,
     )
     return save_prompt(room_name, prompt)
 

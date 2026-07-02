@@ -13,6 +13,7 @@ from app.storage.jsonl import data_dir
 class CalibrationQuestion(BaseModel):
     id: str = Field(min_length=1, max_length=32)
     text: str = Field(min_length=1, max_length=500)
+    matchKeywords: list[str] = Field(default_factory=list)
 
 
 class ScenarioDefinition(BaseModel):

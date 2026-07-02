@@ -28,7 +28,19 @@ def load_profile(room_name: str, participant_id: str) -> AgentProfile | None:
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    return AgentProfile.model_validate(data)
+    profile = AgentProfile.model_validate(data)
+    normalized = _normalize_legacy_profile(profile)
+    if normalized != profile:
+        save_profile(normalized)
+        return normalized
+    return profile
+
+
+def _normalize_legacy_profile(profile: AgentProfile) -> AgentProfile:
+    """Lift old study profiles off the default cap of 3 interventions."""
+    if profile.maxInterventions >= 999:
+        return profile
+    return profile.model_copy(update={"maxInterventions": 999, "updatedAt": now_iso()})
 
 
 def save_profile(profile: AgentProfile) -> AgentProfile:
@@ -43,14 +55,31 @@ def find_proxy_profile_for_room(room_name: str) -> AgentProfile | None:
     if not profiles_dir.exists():
         return None
     slug = safe_room_slug(room_name)
+    candidates: list[AgentProfile] = []
     for path in profiles_dir.glob(f"{slug}__*.json"):
         try:
             profile = AgentProfile.model_validate(json.loads(path.read_text(encoding="utf-8")))
         except Exception:  # noqa: BLE001
             continue
         if profile.calibrationCompletedAt:
-            return profile
-    return None
+            candidates.append(profile)
+    if not candidates:
+        return None
+    # Same room can have multiple proxy tokens (e.g. male/female arms). Use the
+    # most recently active profile so prompts match the console session in use.
+    candidates.sort(
+        key=lambda p: (
+            p.updatedAt or "",
+            p.calibrationCompletedAt or "",
+        ),
+        reverse=True,
+    )
+    best = candidates[0]
+    normalized = _normalize_legacy_profile(best)
+    if normalized != best:
+        save_profile(normalized)
+        return normalized
+    return best
 
 
 def _prompts_path(room_name: str) -> Path:

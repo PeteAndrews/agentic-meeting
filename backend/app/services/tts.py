@@ -7,6 +7,7 @@ import urllib.request
 from typing import Literal
 
 VoiceMode = Literal["generic_tts", "cloned_voice_tts", "manual_test_audio"]
+TtsVoiceGender = Literal["male", "female"]
 
 # OpenAI speech API returns 24 kHz 16-bit signed little-endian PCM.
 OPENAI_PCM_SAMPLE_RATE = 24_000
@@ -16,10 +17,19 @@ class TtsError(Exception):
     pass
 
 
+def resolve_openai_voice(voice_gender: TtsVoiceGender | None = None) -> str:
+    if voice_gender == "male":
+        return os.environ.get("TTS_VOICE_MALE", "onyx").strip() or "onyx"
+    if voice_gender == "female":
+        return os.environ.get("TTS_VOICE_FEMALE", "nova").strip() or "nova"
+    return os.environ.get("TTS_VOICE", "alloy").strip() or "alloy"
+
+
 def synthesize_speech(
     text: str,
     *,
     voice_mode: VoiceMode = "generic_tts",
+    voice_gender: TtsVoiceGender | None = None,
 ) -> tuple[bytes, int]:
     if voice_mode == "cloned_voice_tts":
         raise TtsError("cloned_voice_tts is not implemented yet (Phase 5D)")
@@ -30,7 +40,7 @@ def synthesize_speech(
     if not api_key:
         raise TtsError("OPENAI_API_KEY is required for generic_tts")
 
-    voice = os.environ.get("TTS_VOICE", "alloy").strip() or "alloy"
+    voice = resolve_openai_voice(voice_gender)
     model = os.environ.get("TTS_MODEL", "tts-1").strip() or "tts-1"
 
     payload = {

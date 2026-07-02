@@ -1,5 +1,7 @@
+export const DEFAULT_AGENT_DISPLAY_NAME = 'Echo'
+
 export const ONBOARDING_GREETING =
-  "Hi — I'm Agent C. I'll attend this meeting on your behalf and keep you updated here in our chat."
+  "Hi — I'm Echo. I'll attend this meeting on your behalf and keep you updated here in our chat."
 
 export const ONBOARDING_INTRO_LINES = [
   'I will join the Jitsi meeting for you — you do not need to be in the call.',
@@ -20,7 +22,7 @@ export const VOICE_SAMPLE_INTRO =
 export const VOICE_SAMPLE_SAVED =
   'Thank you — that sample is saved. I will use it to represent your voice in the meeting.'
 
-export const VOICE_SAMPLE_PASSAGE = `I am recording this sample so Agent C can represent my voice during the meeting.
+export const VOICE_SAMPLE_PASSAGE = `I am recording this sample so Echo can represent my voice during the meeting.
 Today we will discuss timelines and trip organisations where my decisions that affect the outcome.
 I will speak clearly and at a natural pace, as I would in a normal conversation with colleagues.
 Please capture the full range of my voice from beginning to end.`

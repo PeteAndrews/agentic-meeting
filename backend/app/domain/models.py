@@ -23,6 +23,9 @@ class ResolveTokenRequest(BaseModel):
     studyToken: str = Field(min_length=4, max_length=128)
 
 
+TtsVoiceGender = Literal["male", "female"]
+
+
 class ResolveTokenResponse(BaseModel):
     participantId: str
     role: Role
@@ -32,7 +35,10 @@ class ResolveTokenResponse(BaseModel):
     voiceOutputMode: Optional[VoiceMode] = None
     scenario: Optional[str] = None
     calibrationDropQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
-    maxInterventions: int = Field(default=3, ge=1, le=20)
+    maxInterventions: int = Field(default=999, ge=1, le=9999)
+    agentTriggerPhrases: list[str] = Field(default_factory=lambda: ["echo"])
+    agentDisplayName: str = "Echo"
+    ttsVoiceGender: Optional[TtsVoiceGender] = None
 
 
 class SessionConfig(BaseModel):
@@ -119,7 +125,10 @@ class AgentProfile(BaseModel):
     calibrationAnswers: dict[str, str] = {}
     calibrationCompletedAt: Optional[str] = None
     interventionsUsed: int = Field(default=0, ge=0)
-    maxInterventions: int = Field(default=3, ge=1, le=20)
+    maxInterventions: int = Field(default=999, ge=1, le=9999)
+    agentTriggerPhrases: list[str] = Field(default_factory=lambda: ["echo"])
+    agentDisplayName: str = "Echo"
+    ttsVoiceGender: Optional[TtsVoiceGender] = None
     updatedAt: Optional[str] = None
 
 
@@ -132,7 +141,10 @@ class AgentProfileUpdate(AgentProfileKey):
     voiceOutputMode: Optional[VoiceMode] = None
     scenario: Optional[str] = None
     droppedQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
-    maxInterventions: Optional[int] = Field(default=None, ge=1, le=20)
+    maxInterventions: Optional[int] = Field(default=None, ge=1, le=9999)
+    agentTriggerPhrases: Optional[list[str]] = None
+    agentDisplayName: Optional[str] = None
+    ttsVoiceGender: Optional[TtsVoiceGender] = None
 
 
 class CalibrationQuestionView(BaseModel):
@@ -171,7 +183,7 @@ class AgentPrompt(BaseModel):
     text: str
     status: AgentPromptStatus
     interventionNumber: int = Field(ge=0)
-    source: Literal["missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration"]
+    source: Literal["missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration", "meeting_meta"]
     createdAt: str
     updatedAt: str
     triggerSegmentText: Optional[str] = None

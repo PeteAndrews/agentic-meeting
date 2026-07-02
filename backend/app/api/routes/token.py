@@ -65,7 +65,10 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
         voice_mode: VoiceMode | None = None
         scenario: str | None = None
         calibration_drop_index: int | None = None
-        max_interventions = 3
+        max_interventions = 999
+        agent_trigger_phrases: list[str] = ["echo"]
+        agent_display_name = "Echo"
+        tts_voice_gender: str | None = None
         if role == Role.PROXY:
             raw_mode = rec.get("voiceOutputMode", "generic_tts")
             if raw_mode in ("generic_tts", "cloned_voice_tts"):
@@ -81,6 +84,17 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
             raw_max = rec.get("maxInterventions")
             if isinstance(raw_max, int) and raw_max >= 1:
                 max_interventions = raw_max
+            raw_phrases = rec.get("agentTriggerPhrases")
+            if isinstance(raw_phrases, list):
+                cleaned = [str(p).strip() for p in raw_phrases if str(p).strip()]
+                if cleaned:
+                    agent_trigger_phrases = cleaned
+            raw_agent_name = rec.get("agentDisplayName")
+            if isinstance(raw_agent_name, str) and raw_agent_name.strip():
+                agent_display_name = raw_agent_name.strip()
+            raw_gender = rec.get("ttsVoiceGender")
+            if raw_gender in ("male", "female"):
+                tts_voice_gender = raw_gender
         else:
             raw_scenario = rec.get("scenario")
             if isinstance(raw_scenario, str) and raw_scenario.strip():
@@ -95,6 +109,9 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
             scenario=scenario,
             calibrationDropQuestionIndex=calibration_drop_index,
             maxInterventions=max_interventions,
+            agentTriggerPhrases=agent_trigger_phrases,
+            agentDisplayName=agent_display_name,
+            ttsVoiceGender=tts_voice_gender,  # type: ignore[arg-type]
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Invalid token registry record: {e}") from e

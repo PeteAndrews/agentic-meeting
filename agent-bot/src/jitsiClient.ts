@@ -200,7 +200,7 @@ export class JitsiClient {
     if (!this.state.connected || this.state.roomName !== roomName || !this.room || !this.jitsi) {
       return {
         ok: false,
-        note: `Agent C is not connected to room "${roomName}" (call POST /bot/join first)`,
+        note: `Echo is not connected to room "${roomName}" (call POST /bot/join first)`,
         bridgeMedia: hasBridgeMedia(this.room),
       };
     }
@@ -337,7 +337,7 @@ export class JitsiClient {
     if (!this.state.connected || this.state.roomName !== roomName || !this.room || !this.jitsi) {
       return {
         ok: false,
-        note: `Agent C is not connected to room "${roomName}" (call POST /bot/join first)`,
+        note: `Echo is not connected to room "${roomName}" (call POST /bot/join first)`,
         bridgeMedia: hasBridgeMedia(this.room),
         text,
       };
@@ -406,7 +406,7 @@ export class JitsiClient {
       await republishLocalAudioToJvb(this.room);
       await ensureConferenceAudioUnmuted(this.room);
 
-      const pcmPlayer = new PcmAudioSource(pcm, sampleRate);
+      const pcmPlayer = new PcmAudioSource();
       this.pcmSource = pcmPlayer;
       let speechTrack: JitsiLocalTrack | null = null;
       const previousTracks = [...this.localAudioTracks];
@@ -422,8 +422,7 @@ export class JitsiClient {
         }
         this.localAudioTracks = [];
 
-        const mediaTrack = pcmPlayer.createTrack();
-        pcmPlayer.start();
+        const mediaTrack = pcmPlayer.ensureTrack();
         speechTrack = await createLocalAudioTrackFromMediaStream(this.jitsi, mediaTrack);
 
         console.log("[agent-bot] adding TTS track to conference");
@@ -435,7 +434,8 @@ export class JitsiClient {
         await ensureConferenceAudioUnmuted(this.room);
 
         console.log(`[agent-bot] speak playing TTS for ~${durationMs}ms`);
-        await new Promise((resolve) => setTimeout(resolve, durationMs + 250));
+        await pcmPlayer.play(pcm, sampleRate);
+        await new Promise((resolve) => setTimeout(resolve, 200));
 
         await muteLocalAudio(this.room, speechTrack);
 

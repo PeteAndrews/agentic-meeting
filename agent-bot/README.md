@@ -1,6 +1,6 @@
 # Agent Bot (Phase 5A–5C)
 
-Programmable HA participant service that joins Jitsi rooms as `Agent C`.
+Programmable HA participant service that joins Jitsi rooms as **Echo**.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ npm run build
 | `JITSI_SERVICE_URL` | `wss://{domain}/xmpp-websocket` | Primary XMPP transport (WebSocket) |
 | `JITSI_BOSH_URL` | `https://{domain}/http-bind` | BOSH fallback if WebSocket fails |
 | `AGENT_BOT_BACKEND_URL` | `http://127.0.0.1:8000` | FastAPI for event logging |
-| `AGENT_DISPLAY_NAME` | `Agent C` | Name shown in Jitsi |
+| `AGENT_DISPLAY_NAME` | `Echo` | Name shown in Jitsi |
 | `AGENT_BOT_FAKE_JITSI` | `false` | `true` = API smoke test only (no real Jitsi) |
 | `AGENT_BOT_DISABLE_FOCUS` | `false` | `true` = skip Jicofo at join (legacy). Default invites focus with a non-blocking conference-request. |
 | `AGENT_BOT_NONBLOCKING_CONFERENCE_REQUEST` | `true` | Lets MUC join complete without waiting for Jicofo `ready=true`. |
@@ -57,15 +57,15 @@ npm start
 1. Start backend: `uvicorn app.main:app --reload --port 8000` (from `backend/`)
 2. Start agent-bot (see above)
 3. Open frontend with `demo-ha-A` (and optionally `demo-ha-B`); at least one human participant must join `am-demo-ha` first
-4. Join Agent C:
+4. Join Echo:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/join `
-  -ContentType "application/json" -Body '{"roomName":"am-demo-ha","displayName":"Agent C"}' `
+  -ContentType "application/json" -Body '{"roomName":"am-demo-ha","displayName":"Echo"}' `
   -TimeoutSec 90
 ```
 
-5. Confirm **Agent C** in the Jitsi participant list.
+5. Confirm **Echo** in the Jitsi participant list.
 6. Speak-test (waits for JVB bridge media, then plays tone):
 
 ```powershell
@@ -104,7 +104,7 @@ npm run dev
 
 - `GET /health`
 - `GET /bot/status` — includes `bridgeMedia` (true when JVB session is active)
-- `POST /bot/join` — `{ "roomName": "am-demo-ha", "displayName": "Agent C" }`
+- `POST /bot/join` — `{ "roomName": "am-demo-ha", "displayName": "Echo" }`
 - `POST /bot/leave` — `{ "roomName": "am-demo-ha" }`
 - `POST /bot/speak-test` — `{ "roomName": "am-demo-ha" }`
 - `POST /bot/speak` — `{ "roomName": "am-demo-ha", "audioBase64": "...", "sampleRate": 24000, "durationMs": 3200, "text": "..." }` (normally called by backend after TTS)

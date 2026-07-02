@@ -245,8 +245,12 @@ export function Meeting() {
 
     rec.onerror = (ev) => {
       const msg = (ev as SpeechRecognitionErrorEvent).error ?? 'unknown_error'
-      setSttLastError(msg)
-      void logEvent('stt.error', { error: msg })
+      // Browser STT emits no-speech / network during silence; harmless while listening.
+      const benign = msg === 'no-speech' || msg === 'network' || msg === 'aborted'
+      if (!benign) {
+        setSttLastError(msg)
+        void logEvent('stt.error', { error: msg })
+      }
     }
 
     rec.onend = () => {

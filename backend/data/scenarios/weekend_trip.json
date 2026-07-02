@@ -12,11 +12,31 @@
     "Day 2 main activity"
   ],
   "calibrationQuestions": [
-    { "id": "q0", "text": "What time does the team arrive at Heathrow airport in London?" },
-    { "id": "q1", "text": "What is the name of the hotel they are staying at?" },
-    { "id": "q2", "text": "How is the team getting from the airport to the hotel?" },
-    { "id": "q3", "text": "What time will we all meet in the hotel lobby on Day 2?" },
-    { "id": "q4", "text": "What activities are you planning on Day 2?" }
+    {
+      "id": "q0",
+      "text": "What time does the team arrive at Heathrow airport in London?",
+      "matchKeywords": ["airport", "heathrow", "arrive", "arrival", "flight", "land", "time", "flying", "fly", "depart", "leave", "uk"]
+    },
+    {
+      "id": "q1",
+      "text": "What is the name of the hotel they are staying at?",
+      "matchKeywords": ["hotel", "stay", "staying", "accommodation", "lodging"]
+    },
+    {
+      "id": "q2",
+      "text": "How is the team getting from the airport to the hotel?",
+      "matchKeywords": ["transport", "transportation", "shuttle", "taxi", "bus", "train", "getting", "airport"]
+    },
+    {
+      "id": "q3",
+      "text": "What time will we all meet in the hotel lobby on Day 2?",
+      "matchKeywords": ["lobby", "meet", "meeting", "gather", "day 2", "morning", "point"]
+    },
+    {
+      "id": "q4",
+      "text": "What activities are you planning on Day 2?",
+      "matchKeywords": ["activities", "activity", "day 2", "plans", "planning", "schedule"]
+    }
   ],
-  "voiceSamplePassage": "I am recording this sample so Agent C can represent my voice during our weekend trip planning meeting. We will discuss destinations, travel dates, hotels, and activities for Day 1 and Day 2. I will speak clearly and at a natural pace."
+  "voiceSamplePassage": "I am recording this sample so Echo can represent my voice during our weekend trip planning meeting. We will discuss destinations, travel dates, hotels, and activities for Day 1 and Day 2. I will speak clearly and at a natural pace."
 }

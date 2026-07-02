@@ -76,6 +76,15 @@ export function AgentConsole() {
         if (activeSession.maxInterventions != null) {
           query.set('maxInterventions', String(activeSession.maxInterventions))
         }
+        if (activeSession.agentTriggerPhrases?.length) {
+          query.set('agentTriggerPhrases', activeSession.agentTriggerPhrases.join(','))
+        }
+        if (activeSession.agentDisplayName) {
+          query.set('agentDisplayName', activeSession.agentDisplayName)
+        }
+        if (activeSession.ttsVoiceGender) {
+          query.set('ttsVoiceGender', activeSession.ttsVoiceGender)
+        }
         const p = await apiJson<AgentProfile>(`/api/agent-profile?${query.toString()}`)
         if (!cancelled) {
           setProfile(p)
@@ -145,7 +154,7 @@ export function AgentConsole() {
       <main className="card agentConsoleMain">
         <h1>Agent Console</h1>
         <p className="muted">
-          Chat with <strong>Agent C</strong>, who attends the meeting on your behalf.
+          Chat with <strong>{session?.agentDisplayName ?? 'Echo'}</strong>, who attends the meeting on your behalf.
         </p>
 
         {profileLoading && <p className="muted">Loading chat…</p>}

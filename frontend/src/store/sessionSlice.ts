@@ -10,6 +10,8 @@ export type StudyScenario =
   | 'birthday_party'
   | 'team_building_seminar'
 
+export type TtsVoiceGender = 'male' | 'female'
+
 export type Session = {
   participantId: string
   role: Role
@@ -20,6 +22,9 @@ export type Session = {
   scenario?: StudyScenario | string
   calibrationDropQuestionIndex?: number | null
   maxInterventions?: number
+  agentTriggerPhrases?: string[]
+  agentDisplayName?: string
+  ttsVoiceGender?: TtsVoiceGender
 }
 
 type SessionState = {
