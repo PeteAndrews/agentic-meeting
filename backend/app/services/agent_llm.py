@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -12,6 +13,8 @@ from app.domain.models import AgentProfile
 from app.services.scenario_loader import ScenarioDefinition, load_scenario, questions_for_calibration
 from app.storage.jsonl import data_dir
 
+logger = logging.getLogger(__name__)
+
 LlmAction = Literal["draft_public", "ask_proxy", "wait"]
 LlmSource = Literal[
     "known_calibration",
@@ -19,6 +22,7 @@ LlmSource = Literal[
     "novel_topic",
     "moderator_disagreement",
     "meeting_meta",
+    "meeting_recap",
 ]
 
 DEFAULT_AGENT_NAME = "Echo"
@@ -54,14 +58,27 @@ def calibration_semantic_inference_enabled() -> bool:
 
 
 def agent_llm_max_tokens() -> int:
-    return _env_int("AGENT_LLM_MAX_TOKENS", 200)
+    # Reasoning models (gpt-5*) spend part of this budget on hidden reasoning
+    # tokens, so it must be well above the expected visible reply length.
+    return _env_int("AGENT_LLM_MAX_TOKENS", 600)
+
+
+def agent_llm_reasoning_effort() -> str:
+    return os.environ.get("AGENT_LLM_REASONING_EFFORT", "low").strip().lower()
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return model.startswith("gpt-5") or model.startswith("o")
 
 
 def apply_completion_token_limit(payload: dict[str, Any], model: str) -> None:
     """gpt-5* and o-series use max_completion_tokens; older models use max_tokens."""
     limit = agent_llm_max_tokens()
-    if model.startswith("gpt-5") or model.startswith("o"):
+    if _is_reasoning_model(model):
         payload["max_completion_tokens"] = limit
+        effort = agent_llm_reasoning_effort()
+        if effort and effort != "default":
+            payload["reasoning_effort"] = effort
     else:
         payload["max_tokens"] = limit
 
@@ -416,7 +433,8 @@ Rules:
 
     try:
         result = call_agent_llm_json(system_prompt=system_prompt, user_prompt=user_prompt)
-    except AgentLlmError:
+    except AgentLlmError as exc:
+        logger.warning("Calibration semantic inference LLM call failed: %s", exc)
         return None
 
     question_id = result.get("questionId")
@@ -575,9 +593,53 @@ Examples:
         spoken = call_agent_llm_text(system_prompt=system_prompt, user_prompt=user_prompt)
         if _calibration_speech_acceptable(spoken, template, raw_answer):
             return spoken
-    except AgentLlmError:
-        pass
+        logger.warning(
+            "Calibration polish reply rejected by acceptability check; using template. spoken=%r",
+            spoken,
+        )
+    except AgentLlmError as exc:
+        logger.warning("Calibration polish LLM call failed; using template: %s", exc)
     return template
+
+
+SUMMARY_UNAVAILABLE_FALLBACK = (
+    "Sorry, I don't have enough of the discussion recorded yet to summarize."
+)
+
+
+def summarize_meeting_so_far(
+    profile: AgentProfile,
+    segments: list[dict[str, Any]],
+    *,
+    trigger_index: int | None = None,
+) -> str:
+    if not segments:
+        return SUMMARY_UNAVAILABLE_FALLBACK
+
+    agent_name = profile.agentDisplayName or DEFAULT_AGENT_NAME
+    policy_excerpt = load_agent_policy(profile)
+    system_prompt = f"""You are {agent_name}, speaking naturally in a live meeting on my user's behalf.
+
+{policy_excerpt}
+
+Summarize the discussion so far in 2-3 short spoken sentences.
+Rules:
+- Focus on decisions made and open items still being discussed
+- Never invent facts, times, places, or preferences not in the transcript
+- Plain speakable text only, no lists or labels
+Return JSON: {{"spoken": "..."}}"""
+
+    user_prompt = (
+        "Someone asked for a summary of the meeting so far. "
+        "Summarize the transcript below.\n\n"
+        + build_transcript_user_prompt(segments, trigger_index=trigger_index)
+    )
+
+    try:
+        return call_agent_llm_text(system_prompt=system_prompt, user_prompt=user_prompt)
+    except AgentLlmError as exc:
+        logger.warning("Meeting summary LLM call failed; using fallback: %s", exc)
+        return SUMMARY_UNAVAILABLE_FALLBACK
 
 
 def evaluate_meeting_turn(

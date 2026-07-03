@@ -183,7 +183,7 @@ class AgentPrompt(BaseModel):
     text: str
     status: AgentPromptStatus
     interventionNumber: int = Field(ge=0)
-    source: Literal["missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration", "meeting_meta"]
+    source: Literal["missing_calibration", "novel_topic", "moderator_disagreement", "known_calibration", "meeting_meta", "meeting_recap"]
     createdAt: str
     updatedAt: str
     triggerSegmentText: Optional[str] = None

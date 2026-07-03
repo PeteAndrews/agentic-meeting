@@ -128,6 +128,21 @@ def update_prompt(room_name: str, prompt_id: str, **updates: Any) -> AgentPrompt
     return updated
 
 
+def find_last_spoken_text(room_name: str, participant_id: str | None = None) -> str | None:
+    """Most recent text Echo actually spoke in the meeting (excluding recap replies)."""
+    best: AgentPrompt | None = None
+    for prompt in load_prompts(room_name):
+        if prompt.kind != "public_draft" or prompt.status != AgentPromptStatus.SPOKEN:
+            continue
+        if prompt.source == "meeting_recap":
+            continue
+        if participant_id and prompt.participantId != participant_id:
+            continue
+        if best is None or prompt.updatedAt >= best.updatedAt:
+            best = prompt
+    return best.text if best else None
+
+
 def has_open_prompt(room_name: str) -> bool:
     for prompt in load_prompts(room_name):
         if prompt.status in (AgentPromptStatus.PENDING_PROXY, AgentPromptStatus.PENDING_APPROVAL):

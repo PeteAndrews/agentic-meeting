@@ -50,8 +50,10 @@ Key variables:
 - `AGENT_TRANSCRIPT_MAX_CHARS` — transcript budget for the agent LLM (default `12000`)
 - `AGENT_ROUTING_TRANSCRIPT_MAX_CHARS` — smaller transcript budget for routing LLM calls (default `2500`)
 - `AGENT_CALIBRATION_TRANSCRIPT_MAX_CHARS` — transcript budget when calibration polish is on (default `2000`)
-- `AGENT_LLM_MAX_TOKENS` — cap on LLM reply length for routing/polish (default `200`)
+- `AGENT_LLM_MAX_TOKENS` — token budget for LLM replies (default `600`). For reasoning models (gpt-5*) this covers hidden reasoning tokens plus visible output; too low a value makes replies come back empty
+- `AGENT_LLM_REASONING_EFFORT` — reasoning effort for gpt-5*/o* models: `minimal` / `low` / `medium` / `high` (default `low`; keeps replies fast and leaves budget for visible output)
 - `AGENT_CALIBRATION_LLM_POLISH` — set `true` to run an extra LLM pass on calibration replies (default `false`; template-only is faster)
+- `AGENT_TRIGGER_ALIASES_EXTRA` — extra literal STT mishearings of "echo" (comma-separated), merged with built-in aliases (`eko`, `eco`, `ekko`, `ecco`, `hecho`, `ako`, `ayako`, `aiko`)
 
 ## Data storage
 

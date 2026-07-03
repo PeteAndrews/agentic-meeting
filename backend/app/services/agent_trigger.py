@@ -8,13 +8,25 @@ from app.domain.models import AgentProfile
 DEFAULT_TRIGGER_PHRASES = ["echo"]
 
 # Common browser-STT mishearings of "Echo" (substring / fuzzy on opener word only).
+# Mishearings starting with a different letter (Ako, Ayako) must be literal
+# aliases: fuzzy matching requires the first letters to match.
 DEFAULT_TRIGGER_ALIASES = [
     "eko",
     "eco",
     "ekko",
     "ecco",
     "hecho",
+    "ako",
+    "ayako",
+    "aiko",
 ]
+
+
+def _extra_aliases() -> list[str]:
+    raw = os.environ.get("AGENT_TRIGGER_ALIASES_EXTRA", "").strip()
+    if not raw:
+        return []
+    return [alias.strip() for alias in raw.split(",") if alias.strip()]
 
 _GREETING_PREFIXES = ("hi", "hello", "hey", "ok", "okay", "so", "well")
 
@@ -70,7 +82,7 @@ def _expand_phrases(phrases: list[str]) -> list[str]:
             expanded.append(candidate)
             seen.add(key)
         if key == "echo":
-            for alias in DEFAULT_TRIGGER_ALIASES:
+            for alias in DEFAULT_TRIGGER_ALIASES + _extra_aliases():
                 alias_key = alias.casefold()
                 if alias_key not in seen:
                     expanded.append(alias)

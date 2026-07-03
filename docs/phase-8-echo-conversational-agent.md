@@ -25,7 +25,12 @@ flowchart TD
   Trigger -->|yes| CalMatch{Calibration match?}
   CalMatch -->|yes| CalSpeech[format_calibration_speech + transcript]
   CalSpeech --> TTS[Speak in Jitsi]
-  CalMatch -->|no| MetaMatch{Meeting-meta match?}
+  CalMatch -->|no| RecapMatch{Recap intent?}
+  RecapMatch -->|repeat_last| LastUtterance[Last spoken prompt text]
+  LastUtterance --> TTS
+  RecapMatch -->|summarize| Summary[summarize_meeting_so_far LLM]
+  Summary --> TTS
+  RecapMatch -->|no| MetaMatch{Meeting-meta match?}
   MetaMatch -->|yes| MetaSpeech[Template reply]
   MetaSpeech --> TTS
   MetaMatch -->|no| LLM[evaluate_meeting_turn + transcript]
@@ -34,15 +39,16 @@ flowchart TD
   Ack --> Console[Proxy prompt to Agent Console]
 ```
 
-## Three-tier question routing
+## Question routing tiers
 
 | Tier | Examples | Meeting | Console |
 |------|----------|---------|---------|
 | Calibration | "what hotel?", "flight time?" | Auto-speak | No |
+| Meeting recap | "what did you just say?", "summarize the meeting" | Auto-speak | No |
 | Meeting-meta | "can you hear me?", "are you there?", "hello" | Auto-speak | No |
 | Substantive unknown | "tell me a story", opinion on plan | Brief ack | Yes |
 
-Deterministic matcher: [`backend/app/services/meeting_meta_matcher.py`](backend/app/services/meeting_meta_matcher.py) runs after calibration, before LLM.
+Deterministic matchers: [`backend/app/services/meeting_recap_matcher.py`](backend/app/services/meeting_recap_matcher.py) and [`backend/app/services/meeting_meta_matcher.py`](backend/app/services/meeting_meta_matcher.py) run after calibration, before the LLM. Recap `repeat_last` replays the most recent spoken prompt from `agent_prompts`; `summarize` calls the LLM with the full transcript budget.
 
 ## Agent policy (`backend/data/prompts/agent_policy.md`)
 
@@ -63,9 +69,10 @@ Behavioral rules separate from scenario/calibration facts:
 - [x] `format_calibration_speech()` receives transcript segments
 - [x] `agent_loop`: speak meeting acknowledgment before proxy console prompt
 - [x] Default display name / wake phrase: **Echo** / `echo`
-- [x] STT aliases: `eko`, `eco`, `ekko`, etc.
+- [x] STT aliases: `eko`, `eco`, `ekko`, `hecho`, `ako`, `ayako`, `aiko`, etc.; extra literal aliases via `AGENT_TRIGGER_ALIASES_EXTRA`
 - [x] `meeting_meta_matcher.py` + three-tier routing in `agent_loop.py`
-- [x] `meeting_meta` source type on prompts and LLM output
+- [x] `meeting_recap_matcher.py`: "what did you just say" replays last spoken prompt; "summarize the meeting" answers via LLM
+- [x] `meeting_meta` / `meeting_recap` source types on prompts and LLM output
 - [x] Console proxy messages ask Person C for input (no spoken draft)
 - [ ] Optional: include prior Echo utterances from `agent_prompts` in transcript context
 - [x] Update `token_registry.jsonl` with `agentDisplayName: Echo`, `agentTriggerPhrases: ["echo"]`

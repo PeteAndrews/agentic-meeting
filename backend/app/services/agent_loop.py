@@ -10,8 +10,10 @@ from app.services.agent_llm import (
     format_calibration_speech,
     format_meeting_acknowledgment,
     format_proxy_console_message,
+    summarize_meeting_so_far,
 )
 from app.services.agent_store import (
+    find_last_spoken_text,
     find_proxy_profile_for_room,
     has_open_prompt,
     new_prompt_id,
@@ -19,6 +21,7 @@ from app.services.agent_store import (
 )
 from app.services.calibration_matcher import resolve_calibration_answer
 from app.services.meeting_meta_matcher import find_meeting_meta_reply
+from app.services.meeting_recap_matcher import classify_recap_intent
 from app.services.agent_speak import AgentSpeakError, speak_for_profile
 from app.services.agent_trigger import match_trigger, resolve_trigger_phrases
 from app.services.scenario_loader import load_scenario
@@ -28,7 +31,7 @@ from app.storage.jsonl import data_dir
 _lock = threading.Lock()
 _last_processed: dict[str, int] = {}
 
-AutoSpeakSource = Literal["known_calibration", "meeting_meta"]
+AutoSpeakSource = Literal["known_calibration", "meeting_meta", "meeting_recap"]
 
 
 def _segments_path(room_name: str):
@@ -96,6 +99,7 @@ def _infer_source(profile: AgentProfile, llm_source: str | None) -> str:
         "moderator_disagreement",
         "known_calibration",
         "meeting_meta",
+        "meeting_recap",
     ):
         return llm_source
     return "novel_topic"
@@ -276,6 +280,40 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             source="known_calibration",
             now=now,
             event_payload=event_payload,
+        )
+
+    recap_intent = classify_recap_intent(trigger_text)
+    if recap_intent == "repeat_last":
+        last_spoken = find_last_spoken_text(room_name)
+        spoken = (
+            f"Sure — I said: {last_spoken}"
+            if last_spoken
+            else "I haven't said anything in this meeting yet."
+        )
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=spoken,
+            trigger_text=trigger_text,
+            source="meeting_recap",
+            now=now,
+            event_payload={"recapKind": "repeat_last"},
+        )
+
+    if recap_intent == "summarize":
+        spoken = summarize_meeting_so_far(
+            profile,
+            segments,
+            trigger_index=len(segments) - 1,
+        )
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=spoken,
+            trigger_text=trigger_text,
+            source="meeting_recap",
+            now=now,
+            event_payload={"recapKind": "summarize"},
         )
 
     meta_reply = find_meeting_meta_reply(trigger_text)
