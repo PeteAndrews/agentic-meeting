@@ -136,12 +136,21 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
 
     draft = create_draft_from_proxy_reply(
         roomName,
-        prompt.participantId,
+        profile,
         proxy_reply=body.text,
         source=prompt.source,
         trigger_segment_text=prompt.triggerSegmentText,
     )
-    _persist_event(roomName, "agent.prompt_proxy_answered", {"promptId": prompt_id, "draftId": draft.id})
+    _persist_event(
+        roomName,
+        "agent.prompt_proxy_answered",
+        {
+            "promptId": prompt_id,
+            "draftId": draft.id,
+            "rawReply": body.text,
+            "polishedReply": draft.text,
+        },
+    )
     return {"status": "ok", "prompt": updated.model_dump(), "draft": draft.model_dump()}
 
 

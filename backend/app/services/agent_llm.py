@@ -6,10 +6,12 @@ import os
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from app.domain.models import AgentProfile
+from app.domain.models import AgentProfile, AgentPrompt, AgentPromptStatus
+from app.services.agent_store import load_prompts
 from app.services.scenario_loader import ScenarioDefinition, load_scenario, questions_for_calibration
 from app.storage.jsonl import data_dir
 
@@ -134,17 +136,13 @@ def format_proxy_console_message(
     *,
     reason: str | None = None,
 ) -> str:
-    lines = [
-        f'Someone in the meeting asked: "{trigger_text}"',
-        "",
-        "I don't have this from your calibration and need your input before I can answer in the meeting.",
-    ]
-    if reason and reason.strip():
-        lines.append(f"Why I need input: {reason.strip()}")
-    detail = llm_text.strip()
-    if detail:
-        lines.append(f"Please share: {detail}")
-    return "\n".join(lines)
+    question = trigger_text.strip()
+    if question:
+        return (
+            f"Hi in the meeting I was asked, '{question}', "
+            "give me an answer and I will communicate it in the meeting."
+        )
+    return "Hi, I need your answer so I can respond in the meeting."
 
 
 def format_discussion_key_points(scenario: ScenarioDefinition) -> str:
@@ -247,6 +245,84 @@ def build_transcript_user_prompt(
 
     all_lines = selected + ([trigger_line] if trigger_line else [])
     return header + "\n".join(all_lines)
+
+
+def _iso_to_ms(iso: str) -> int:
+    normalized = iso.strip().replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _segment_sort_key(seg: dict[str, Any]) -> tuple[int, int, str, str]:
+    return (
+        int(seg.get("startMs", 0)),
+        0 if seg.get("role") != "agent" else 1,
+        str(seg.get("participantId") or ""),
+        str(seg.get("text") or ""),
+    )
+
+
+def _spoken_prompts_to_segments(
+    prompts: list[AgentPrompt],
+    *,
+    agent_label: str,
+) -> list[dict[str, Any]]:
+    utterances: list[dict[str, Any]] = []
+    for prompt in prompts:
+        if prompt.kind != "public_draft":
+            continue
+        if prompt.status != AgentPromptStatus.SPOKEN:
+            continue
+        text = prompt.text.strip()
+        if not text:
+            continue
+        when_ms = _iso_to_ms(prompt.updatedAt or prompt.createdAt)
+        utterances.append(
+            {
+                "role": "agent",
+                "participantId": agent_label,
+                "text": text,
+                "startMs": when_ms,
+                "endMs": when_ms,
+                "isFinal": True,
+            }
+        )
+    return utterances
+
+
+def merge_meeting_transcript(
+    segments: list[dict[str, Any]],
+    prompts: list[AgentPrompt],
+    *,
+    agent_label: str = "echo",
+    trigger_index: int | None = None,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Interleave participant STT segments with Echo's spoken lines for summarization."""
+    if trigger_index is None:
+        trigger_index = len(segments) - 1 if segments else None
+
+    trigger_seg = segments[trigger_index] if trigger_index is not None and segments else None
+    trigger_ms = int(trigger_seg.get("startMs", 0)) if trigger_seg is not None else None
+    agent_segments = _spoken_prompts_to_segments(prompts, agent_label=agent_label)
+    if trigger_ms is not None:
+        agent_segments = [s for s in agent_segments if int(s.get("startMs", 0)) < trigger_ms]
+
+    merged = list(segments) + agent_segments
+    merged.sort(key=_segment_sort_key)
+
+    merged_trigger_index: int | None = None
+    if trigger_seg is not None:
+        target_key = _segment_sort_key(trigger_seg)
+        for i, seg in enumerate(merged):
+            if _segment_sort_key(seg) == target_key:
+                merged_trigger_index = i
+                break
+        if merged_trigger_index is None:
+            merged_trigger_index = len(merged) - 1
+
+    return merged, merged_trigger_index
 
 
 def parse_llm_json_object(raw: str) -> dict[str, Any]:
@@ -602,6 +678,73 @@ Examples:
     return template
 
 
+def _proxy_reply_acceptable(spoken: str, raw_answer: str) -> bool:
+    spoken_cf = spoken.casefold().strip()
+    raw_cf = raw_answer.casefold().strip()
+    if not spoken_cf:
+        return False
+    if spoken_cf == raw_cf and len(spoken.split()) < 4:
+        return False
+    return len(spoken.split()) >= 3
+
+
+def format_proxy_reply_speech(
+    profile: AgentProfile,
+    *,
+    trigger_text: str,
+    proxy_reply: str,
+    segments: list[dict[str, Any]] | None = None,
+) -> str:
+    """Turn a console answer from my user into conversational meeting speech."""
+    raw = proxy_reply.strip()
+    if not raw:
+        return raw
+
+    agent_name = profile.agentDisplayName or DEFAULT_AGENT_NAME
+    policy_excerpt = load_agent_policy(profile)
+    system_prompt = f"""You are {agent_name}, speaking naturally in a live meeting on my user's behalf.
+
+{policy_excerpt}
+
+Rewrite my user's console answer as conversational spoken English (1–3 short sentences) for the meeting.
+Rules:
+- Keep every fact and preference from their answer; do not add, remove, or change details
+- Refer to them as "my user" when speaking about them in the third person
+- Use the recent transcript for context (address the question or tie to the discussion when relevant)
+- Do not read the answer as a bare label or fragment — use complete sentences
+- Plain speakable text only, no lists or labels
+Return JSON: {{"spoken": "..."}}"""
+
+    transcript_block = ""
+    if segments:
+        transcript_block = (
+            "\n\n"
+            + build_transcript_user_prompt(
+                segments,
+                max_chars=routing_transcript_max_chars(),
+            )
+        )
+
+    trigger_line = f'Meeting question: "{trigger_text}"\n' if trigger_text.strip() else ""
+    user_prompt = (
+        f"{trigger_line}"
+        f"My user's console answer (facts to preserve): {raw}"
+        f"{transcript_block}"
+    )
+
+    try:
+        spoken = call_agent_llm_text(system_prompt=system_prompt, user_prompt=user_prompt)
+        if _proxy_reply_acceptable(spoken, raw):
+            return spoken
+        logger.warning(
+            "Proxy reply polish rejected by acceptability check; using raw answer. spoken=%r",
+            spoken,
+        )
+    except AgentLlmError as exc:
+        logger.warning("Proxy reply polish LLM call failed; using raw answer: %s", exc)
+    return raw
+
+
 SUMMARY_UNAVAILABLE_FALLBACK = (
     "Sorry, I don't have enough of the discussion recorded yet to summarize."
 )
@@ -616,14 +759,24 @@ def summarize_meeting_so_far(
     if not segments:
         return SUMMARY_UNAVAILABLE_FALLBACK
 
+    agent_label = (profile.agentDisplayName or DEFAULT_AGENT_NAME).casefold()
+    prompts = load_prompts(profile.roomName)
+    merged_segments, merged_trigger_index = merge_meeting_transcript(
+        segments,
+        prompts,
+        agent_label=agent_label,
+        trigger_index=trigger_index,
+    )
+
     agent_name = profile.agentDisplayName or DEFAULT_AGENT_NAME
     policy_excerpt = load_agent_policy(profile)
     system_prompt = f"""You are {agent_name}, speaking naturally in a live meeting on my user's behalf.
 
 {policy_excerpt}
 
-Summarize the discussion so far in 2-3 short spoken sentences.
+Summarize the discussion so far in 2-4 short spoken sentences.
 Rules:
+- Cover the main topics raised by participants and what you ({agent_name}) answered
 - Focus on decisions made and open items still being discussed
 - Never invent facts, times, places, or preferences not in the transcript
 - Plain speakable text only, no lists or labels
@@ -631,8 +784,8 @@ Return JSON: {{"spoken": "..."}}"""
 
     user_prompt = (
         "Someone asked for a summary of the meeting so far. "
-        "Summarize the transcript below.\n\n"
-        + build_transcript_user_prompt(segments, trigger_index=trigger_index)
+        "The transcript below includes participant speech and your spoken replies.\n\n"
+        + build_transcript_user_prompt(merged_segments, trigger_index=merged_trigger_index)
     )
 
     try:

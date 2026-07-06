@@ -326,17 +326,9 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         if (seenPromptIdsRef.current.has(prompt.id)) continue
         if (prompt.status === 'pending_proxy') {
           seenPromptIdsRef.current.add(prompt.id)
-          const meetingLine = prompt.triggerSegmentText
-            ? `In the meeting, someone asked:\n"${prompt.triggerSegmentText}"`
-            : ''
-          pushAgent(
-            [
-              meetingLine,
-              prompt.text ? `I need your input before I can respond:\n\n${prompt.text}` : '',
-            ]
-              .filter(Boolean)
-              .join('\n\n'),
-          )
+          if (prompt.text) {
+            pushAgent(prompt.text)
+          }
         }
         if (prompt.status === 'pending_approval') {
           seenPromptIdsRef.current.add(prompt.id)
@@ -906,20 +898,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
       {saveError && <p className="error">{saveError}</p>}
 
       {step === 'active' && openProxyPrompt && (
-        <div className="chatComposer calibration">
-          <p className="muted">{agentName} needs your answer before responding in the meeting.</p>
-          {openProxyPrompt.triggerSegmentText && (
-            <div className="chatBubble" style={{ marginBottom: 12 }}>
-              <strong>In the meeting:</strong>
-              <div>"{openProxyPrompt.triggerSegmentText}"</div>
-            </div>
-          )}
-          {openProxyPrompt.text && (
-            <div className="chatBubble" style={{ marginBottom: 12 }}>
-              <strong>{agentName} asks:</strong>
-              <div>{openProxyPrompt.text}</div>
-            </div>
-          )}
+        <div className="chatComposer">
           <textarea
             className="input chatInput"
             rows={3}

@@ -10,6 +10,7 @@ from app.services.agent_llm import (
     format_calibration_speech,
     format_meeting_acknowledgment,
     format_proxy_console_message,
+    format_proxy_reply_speech,
     summarize_meeting_so_far,
 )
 from app.services.agent_store import (
@@ -407,19 +408,26 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
 
 def create_draft_from_proxy_reply(
     room_name: str,
-    participant_id: str,
+    profile: AgentProfile,
     *,
     proxy_reply: str,
     source: str,
     trigger_segment_text: str | None = None,
 ) -> AgentPrompt:
+    segments = _load_final_segments(room_name)
+    spoken = format_proxy_reply_speech(
+        profile,
+        trigger_text=trigger_segment_text or "",
+        proxy_reply=proxy_reply,
+        segments=segments,
+    )
     now = now_iso()
     prompt = AgentPrompt(
         id=new_prompt_id(),
         roomName=room_name,
-        participantId=participant_id,
+        participantId=profile.participantId,
         kind="public_draft",
-        text=proxy_reply.strip(),
+        text=spoken.strip(),
         status=AgentPromptStatus.PENDING_APPROVAL,
         interventionNumber=0,
         source=source,  # type: ignore[arg-type]
