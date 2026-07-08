@@ -12,10 +12,10 @@ class Condition(str, Enum):
 
 
 class Role(str, Enum):
-    MODERATOR = "moderator"  # Person A
-    ACTIVE = "active"  # Person B
-    SILENT = "silent"  # Person C (HH only; muted)
-    PROXY = "proxy"  # Person C (HA only; Agent Console, no Jitsi)
+    MODERATOR = "moderator"  # User C
+    ACTIVE = "active"  # User B
+    SILENT = "silent"  # User A (HH only; muted)
+    PROXY = "proxy"  # User A (HA only; Agent Console, no Jitsi)
     AGENT = "agent"  # embodied proxy participant (HA)
 
 
@@ -51,7 +51,7 @@ class SessionConfig(BaseModel):
     sttSendInterim: bool = False
     # Consent-friendly default: require explicit user action to enable mic/STT.
     sttRequireUserClick: bool = True
-    # In HH, C is present but should be muted and silent.
+    # In HH, User A is present but should be muted and silent.
     hhSilentRole: Role = Role.SILENT
     # Audio-first agent actions: speak/ask_clarification/wait (no chat UI).
     agentActions: list[Literal["speak", "ask_clarification", "wait"]] = [

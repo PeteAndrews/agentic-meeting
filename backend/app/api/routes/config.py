@@ -25,7 +25,7 @@ def get_session_config(roomName: str = Query(min_length=1, max_length=256)) -> S
             raise HTTPException(status_code=500, detail=f"Invalid session config JSON: {e}") from e
 
     # Default: minimal config; condition can be overridden later once tokens drive it.
-    if roomName.startswith("am-demo-ha"):
+    if roomName.startswith(("am-demo-ha", "am-pilot-ha")):
         return SessionConfig(
             roomName=roomName,
             condition=Condition.HA,

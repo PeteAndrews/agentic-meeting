@@ -67,7 +67,7 @@ export function Lobby() {
             className="input"
             value={token}
             onChange={(e) => setTokenValue(e.target.value)}
-            placeholder="e.g., demo-token-1"
+            placeholder="e.g., pilot-trip-C"
             autoComplete="off"
           />
         </div>

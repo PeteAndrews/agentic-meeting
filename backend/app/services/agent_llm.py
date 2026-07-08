@@ -30,7 +30,7 @@ LlmSource = Literal[
 DEFAULT_AGENT_NAME = "Echo"
 PROXY_USER_LABEL = "my user"
 MEETING_UNKNOWN_ACK = (
-    "Hi — sorry, I don't have that from my user. I'll check with them and get back to you."
+    "Good question — I don't have that from my user yet. I'll check with them and get back to you."
 )
 
 
@@ -632,10 +632,12 @@ def format_calibration_speech(
 
 {policy_excerpt}
 
-Rewrite the draft reply as conversational spoken English (1–3 short sentences).
+Rewrite the draft reply as conversational spoken English (1–3 short sentences; up to 4 when tying to prior discussion).
 Rules:
-- Keep every fact from my user's answer; do not add, remove, or change details
-- Use the recent transcript for context (refer to others' suggestions when relevant)
+- Keep every fact from my user's answer; do not add, remove, or change substantive details
+- You may add brief conversational framing: acknowledgments, soft agreement, or a bridge from the recent transcript
+- Read the recent transcript and refer to what others said when relevant (who suggested what, what was just discussed)
+- Do not invent new preferences, reasons, times, places, or decisions not in the answer, calibration, scenario, or transcript
 - Do not read the answer as a bare label or fragment — use complete sentences
 - Plain speakable text only
 Return JSON: {{"spoken": "..."}}
@@ -643,6 +645,8 @@ Return JSON: {{"spoken": "..."}}
 Examples:
 - Facts: "the meridian near leicester square" -> "We're staying at the Meridian near Leicester Square."
 - Facts: "0900" (departure time) -> "We're flying out at 9 a.m."
+- Facts: "taxi" after transport was discussed -> "On the airport transfer — my user had taxi in mind."
+- Facts: "7 sounds good" -> "Sure, that works for my user too — they're happy with 7."
 - Disagreement context: someone suggested Leicester -> "Sorry — meeting at Leicester isn't suitable for my user; they suggest the Meridian near Leicester Square instead."
 """
 
@@ -694,6 +698,7 @@ def format_proxy_reply_speech(
     trigger_text: str,
     proxy_reply: str,
     segments: list[dict[str, Any]] | None = None,
+    trigger_index: int | None = None,
 ) -> str:
     """Turn a console answer from my user into conversational meeting speech."""
     raw = proxy_reply.strip()
@@ -706,14 +711,22 @@ def format_proxy_reply_speech(
 
 {policy_excerpt}
 
-Rewrite my user's console answer as conversational spoken English (1–3 short sentences) for the meeting.
+Rewrite my user's console answer as conversational spoken English (1–3 short sentences; up to 4 when tying to prior discussion) for the meeting.
 Rules:
-- Keep every fact and preference from their answer; do not add, remove, or change details
+- Keep every fact and preference from their answer; do not add, remove, or change substantive details
 - Refer to them as "my user" when speaking about them in the third person
-- Use the recent transcript for context (address the question or tie to the discussion when relevant)
+- You may add brief conversational framing: acknowledgments, soft agreement, or a bridge from the recent transcript
+- Read the recent transcript and refer to what others said when relevant (address the question or tie to the discussion)
+- Do not invent new preferences, reasons, times, places, or decisions not in their answer, calibration, scenario, or transcript
 - Do not read the answer as a bare label or fragment — use complete sentences
 - Plain speakable text only, no lists or labels
-Return JSON: {{"spoken": "..."}}"""
+Return JSON: {{"spoken": "..."}}
+
+Examples:
+- Console: "7 sounds good" -> "Sure, that works for my user too — they're happy with 7."
+- Console: "taxi" after transport was discussed -> "On the airport transfer — my user had taxi in mind."
+- Console: "no, too early" -> "Sorry — that's a bit too early for my user."
+"""
 
     transcript_block = ""
     if segments:
@@ -721,6 +734,7 @@ Return JSON: {{"spoken": "..."}}"""
             "\n\n"
             + build_transcript_user_prompt(
                 segments,
+                trigger_index=trigger_index,
                 max_chars=routing_transcript_max_chars(),
             )
         )

@@ -55,7 +55,7 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
             "role": Role.MODERATOR.value,
             "condition": Condition.HH.value,
             "roomName": room_name,
-            "displayName": "Moderator (A)",
+            "displayName": "User C (moderator)",
         }
         append_jsonl(_tokens_path(), rec)
 

@@ -1,6 +1,6 @@
 import type { Role } from '../store/sessionSlice'
 
-/** HA Person C (proxy user) uses the Agent Console, not Jitsi. */
+/** HA User A (delegating attendee) uses the Agent Console, not Jitsi. */
 export function destinationForRole(role: Role): '/meeting' | '/agent-console' {
   if (role === 'proxy') {
     return '/agent-console'

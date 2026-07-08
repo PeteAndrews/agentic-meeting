@@ -406,6 +406,20 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
     )
 
 
+def _trigger_segment_index(
+    segments: list[dict[str, Any]],
+    trigger_segment_text: str | None,
+) -> int | None:
+    if not segments:
+        return None
+    if trigger_segment_text:
+        target = trigger_segment_text.strip()
+        for i, seg in enumerate(segments):
+            if str(seg.get("text") or "").strip() == target:
+                return i
+    return len(segments) - 1
+
+
 def create_draft_from_proxy_reply(
     room_name: str,
     profile: AgentProfile,
@@ -421,6 +435,7 @@ def create_draft_from_proxy_reply(
         trigger_text=trigger_segment_text or "",
         proxy_reply=proxy_reply,
         segments=segments,
+        trigger_index=_trigger_segment_index(segments, trigger_segment_text),
     )
     now = now_iso()
     prompt = AgentPrompt(
