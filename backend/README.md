@@ -54,6 +54,9 @@ Key variables:
 - `AGENT_LLM_REASONING_EFFORT` — reasoning effort for gpt-5*/o* models: `minimal` / `low` / `medium` / `high` (default `low`; keeps replies fast and leaves budget for visible output)
 - `AGENT_CALIBRATION_LLM_POLISH` — set `true` to run an extra LLM pass on calibration replies (default `false`; template-only is faster)
 - `AGENT_TRIGGER_ALIASES_EXTRA` — extra literal STT mishearings of "echo" (comma-separated), merged with built-in aliases (`eko`, `eco`, `ekko`, `ecco`, `hecho`, `ako`, `ayako`, `aiko`)
+- `F5_TTS_SERVICE_URL` — HTTP sidecar for `cloned_voice_tts` (default `http://127.0.0.1:8765`; see [`f5-tts-service/README.md`](../f5-tts-service/README.md))
+- `F5_TTS_REQUEST_TIMEOUT_SEC` — clone synthesis timeout (default `120`)
+- `FFMPEG_PATH` — optional path to `ffmpeg` (converts WebM voice samples to WAV for F5-TTS)
 
 ## Data storage
 
@@ -69,7 +72,7 @@ HA tokens include:
 
 - `demo-ha-C-trip` — role **`proxy`**, `scenario: weekend_trip`, `calibrationDropQuestionIndex: 2`, `voiceOutputMode: generic_tts`, `ttsVoiceGender: female`, wake phrase `echo`
 - `demo-ha-C-trip-male` — same scenario with `ttsVoiceGender: male`
-- `demo-ha-C-trip-clone` — role **`proxy`**, clone arm for the same scenario (TTS speak fails until Phase 5D)
+- `demo-ha-C-trip-clone` — role **`proxy`**, clone arm (`voiceOutputMode: cloned_voice_tts`); requires **f5-tts-service** running (see below)
 
 Person C is routed to the Agent Console (Phase 6A), not Jitsi. Re-copy the example file if you created your registry before scenarios were added.
 
@@ -150,7 +153,28 @@ TTS_VOICE_FEMALE=nova
 TTS_MODEL=tts-1
 ```
 
+### Voice clone TTS (Phase 5D)
+
+Tokens with `voiceOutputMode: cloned_voice_tts` (e.g. `demo-ha-C-trip-clone`) use [F5-TTS](https://github.com/SWivid/F5-TTS) via a separate sidecar — **not** OpenAI TTS.
+
+1. Start **f5-tts-service** (see [`f5-tts-service/README.md`](../f5-tts-service/README.md))
+2. Set `F5_TTS_SERVICE_URL` in `backend/.env` (default `http://127.0.0.1:8765`)
+3. Ensure **ffmpeg** is on PATH (converts browser WebM voice samples to WAV)
+4. Person C records a voice sample during onboarding (existing clone-arm flow)
+5. Echo speaks with the cloned voice when triggered in the meeting
+
+`generic_tts` tokens are unchanged and still use OpenAI.
+
 Example:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
+  -ContentType "application/json" `
+  -Body '{"roomName":"am-demo-ha-trip","text":"Hello from the clone arm.","voiceMode":"cloned_voice_tts"}' `
+  -TimeoutSec 180
+```
+
+Generic TTS example:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
@@ -161,7 +185,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
 
 ## Study flow (HA demo)
 
-1. Start backend, agent-bot, and frontend.
+1. Start backend, **f5-tts-service** (clone arm only), agent-bot, and frontend.
 2. Person A joins Jitsi with `demo-ha-A` (moderator should be in the room first).
 3. Person B joins with `demo-ha-B`.
 4. Person C opens Agent Console with `demo-ha-C-trip` or `demo-ha-C-trip-clone`.

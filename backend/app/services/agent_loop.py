@@ -243,6 +243,40 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
     )
 
     now = now_iso()
+    recap_intent = classify_recap_intent(trigger_text)
+    if recap_intent == "repeat_last":
+        last_spoken = find_last_spoken_text(room_name)
+        spoken = (
+            f"Sure — I said: {last_spoken}"
+            if last_spoken
+            else "I haven't said anything in this meeting yet."
+        )
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=spoken,
+            trigger_text=trigger_text,
+            source="meeting_recap",
+            now=now,
+            event_payload={"recapKind": "repeat_last"},
+        )
+
+    if recap_intent == "summarize":
+        spoken = summarize_meeting_so_far(
+            profile,
+            segments,
+            trigger_index=len(segments) - 1,
+        )
+        return _auto_speak_prompt(
+            room_name,
+            profile,
+            spoken=spoken,
+            trigger_text=trigger_text,
+            source="meeting_recap",
+            now=now,
+            event_payload={"recapKind": "summarize"},
+        )
+
     calibration_hit = resolve_calibration_answer(profile, trigger_text)
     if calibration_hit:
         question, answer, match_method = calibration_hit
@@ -281,40 +315,6 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             source="known_calibration",
             now=now,
             event_payload=event_payload,
-        )
-
-    recap_intent = classify_recap_intent(trigger_text)
-    if recap_intent == "repeat_last":
-        last_spoken = find_last_spoken_text(room_name)
-        spoken = (
-            f"Sure — I said: {last_spoken}"
-            if last_spoken
-            else "I haven't said anything in this meeting yet."
-        )
-        return _auto_speak_prompt(
-            room_name,
-            profile,
-            spoken=spoken,
-            trigger_text=trigger_text,
-            source="meeting_recap",
-            now=now,
-            event_payload={"recapKind": "repeat_last"},
-        )
-
-    if recap_intent == "summarize":
-        spoken = summarize_meeting_so_far(
-            profile,
-            segments,
-            trigger_index=len(segments) - 1,
-        )
-        return _auto_speak_prompt(
-            room_name,
-            profile,
-            spoken=spoken,
-            trigger_text=trigger_text,
-            source="meeting_recap",
-            now=now,
-            event_payload={"recapKind": "summarize"},
         )
 
     meta_reply = find_meeting_meta_reply(trigger_text)
@@ -413,6 +413,7 @@ def create_draft_from_proxy_reply(
     proxy_reply: str,
     source: str,
     trigger_segment_text: str | None = None,
+    status: AgentPromptStatus = AgentPromptStatus.PENDING_APPROVAL,
 ) -> AgentPrompt:
     segments = _load_final_segments(room_name)
     spoken = format_proxy_reply_speech(
@@ -428,7 +429,7 @@ def create_draft_from_proxy_reply(
         participantId=profile.participantId,
         kind="public_draft",
         text=spoken.strip(),
-        status=AgentPromptStatus.PENDING_APPROVAL,
+        status=status,
         interventionNumber=0,
         source=source,  # type: ignore[arg-type]
         createdAt=now,

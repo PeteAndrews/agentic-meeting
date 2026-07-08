@@ -151,6 +151,7 @@ def agent_speak(body: AgentSpeakRequest) -> dict[str, Any]:
             body.text,
             voice_mode=body.voiceMode,
             voice_gender=voice_gender,
+            profile=profile,
         )
     except TtsError as exc:
         failed = _backend_event(body.roomName, "agent.speak_failed", {"error": str(exc)})

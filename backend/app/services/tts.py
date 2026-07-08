@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from typing import Literal
 
+from app.domain.models import AgentProfile
+
 VoiceMode = Literal["generic_tts", "cloned_voice_tts", "manual_test_audio"]
 TtsVoiceGender = Literal["male", "female"]
 
@@ -30,9 +32,14 @@ def synthesize_speech(
     *,
     voice_mode: VoiceMode = "generic_tts",
     voice_gender: TtsVoiceGender | None = None,
+    profile: AgentProfile | None = None,
 ) -> tuple[bytes, int]:
     if voice_mode == "cloned_voice_tts":
-        raise TtsError("cloned_voice_tts is not implemented yet (Phase 5D)")
+        if profile is None:
+            raise TtsError("Agent profile required for cloned_voice_tts")
+        from app.services.tts_f5 import synthesize_f5_clone
+
+        return synthesize_f5_clone(text, profile=profile)
     if voice_mode != "generic_tts":
         raise TtsError(f"Unsupported voice mode: {voice_mode}")
 

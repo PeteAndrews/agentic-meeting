@@ -43,12 +43,14 @@ def speak_in_room(
     *,
     voice_mode: VoiceMode = "generic_tts",
     voice_gender: str | None = None,
+    profile: AgentProfile | None = None,
 ) -> int:
     try:
         pcm, sample_rate = synthesize_speech(
             text,
             voice_mode=voice_mode,
             voice_gender=voice_gender,  # type: ignore[arg-type]
+            profile=profile,
         )
     except TtsError as exc:
         raise AgentSpeakError(str(exc)) from exc
@@ -72,4 +74,5 @@ def speak_for_profile(room_name: str, profile: AgentProfile, text: str) -> int:
         text,
         voice_mode=profile.voiceOutputMode,
         voice_gender=profile.ttsVoiceGender,
+        profile=profile,
     )

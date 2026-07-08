@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.domain.models import (
+    AgentProfile,
     AgentPrompt,
     AgentPromptEditRequest,
     AgentPromptRespondRequest,
@@ -81,15 +82,17 @@ def _get_prompt(room_name: str, prompt_id: str) -> AgentPrompt:
 def _speak_approved_text(
     room_name: str,
     text: str,
-    voice_mode: str,
-    voice_gender: str | None = None,
+    profile: AgentProfile | None,
 ) -> None:
+    voice_mode = profile.voiceOutputMode if profile else "generic_tts"
+    voice_gender = profile.ttsVoiceGender if profile else None
     try:
         speak_in_room(
             room_name,
             text,
-            voice_mode=voice_mode,  # type: ignore[arg-type]
-            voice_gender=voice_gender,  # type: ignore[arg-type]
+            voice_mode=voice_mode,
+            voice_gender=voice_gender,
+            profile=profile,
         )
     except AgentSpeakError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -140,18 +143,26 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
         proxy_reply=body.text,
         source=prompt.source,
         trigger_segment_text=prompt.triggerSegmentText,
+        status=AgentPromptStatus.APPROVED,
     )
+    _speak_approved_text(roomName, draft.text, profile)
+    spoken_draft = update_prompt(roomName, draft.id, status=AgentPromptStatus.SPOKEN)
+    if not spoken_draft:
+        raise HTTPException(status_code=404, detail="Draft prompt not found")
+
     _persist_event(
         roomName,
         "agent.prompt_proxy_answered",
         {
             "promptId": prompt_id,
-            "draftId": draft.id,
+            "draftId": spoken_draft.id,
             "rawReply": body.text,
-            "polishedReply": draft.text,
+            "polishedReply": spoken_draft.text,
+            "autoSpoken": True,
         },
     )
-    return {"status": "ok", "prompt": updated.model_dump(), "draft": draft.model_dump()}
+    _persist_event(roomName, "agent.prompt_approved", {"promptId": spoken_draft.id, "text": spoken_draft.text})
+    return {"status": "ok", "prompt": updated.model_dump(), "draft": spoken_draft.model_dump()}
 
 
 @router.post("/agent/prompts/{prompt_id}/approve")
@@ -161,10 +172,8 @@ def approve_prompt(prompt_id: str, roomName: str = Query(min_length=1)) -> dict[
         raise HTTPException(status_code=400, detail="Prompt is not awaiting approval")
 
     profile = load_proxy_profile(roomName, prompt.participantId)
-    voice_mode = profile.voiceOutputMode if profile else "generic_tts"
-    voice_gender = profile.ttsVoiceGender if profile else None
 
-    _speak_approved_text(roomName, prompt.text, voice_mode, voice_gender)
+    _speak_approved_text(roomName, prompt.text, profile)
     updated = update_prompt(roomName, prompt_id, status=AgentPromptStatus.SPOKEN)
     _persist_event(roomName, "agent.prompt_approved", {"promptId": prompt_id, "text": prompt.text})
     return {"status": "ok", "prompt": updated.model_dump() if updated else None}
@@ -181,10 +190,8 @@ def edit_and_approve_prompt(
         raise HTTPException(status_code=400, detail="Prompt is not awaiting approval")
 
     profile = load_proxy_profile(roomName, prompt.participantId)
-    voice_mode = profile.voiceOutputMode if profile else "generic_tts"
-    voice_gender = profile.ttsVoiceGender if profile else None
 
-    _speak_approved_text(roomName, body.text, voice_mode, voice_gender)
+    _speak_approved_text(roomName, body.text, profile)
     updated = update_prompt(roomName, prompt_id, status=AgentPromptStatus.SPOKEN, text=body.text)
     _persist_event(roomName, "agent.prompt_edited", {"promptId": prompt_id, "text": body.text})
     return {"status": "ok", "prompt": updated.model_dump() if updated else None}
