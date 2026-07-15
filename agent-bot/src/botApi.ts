@@ -103,5 +103,33 @@ export function createBotApi(jitsiClient: JitsiClient, audioPublisher: AudioPubl
     }
   });
 
+  router.post("/thinking/start", async (req, res) => {
+    const body = req.body as SpeakTestBody;
+    if (!body?.roomName) {
+      return res.status(400).json({ error: "roomName is required" });
+    }
+    try {
+      const result = await audioPublisher.startThinking(body.roomName);
+      if (!result.ok) {
+        return res.status(409).json({ status: "error", ...result });
+      }
+      return res.json({ status: "ok", ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  router.post("/thinking/stop", async (req, res) => {
+    const body = req.body as LeaveBody;
+    try {
+      const result = await audioPublisher.stopThinking(body?.roomName);
+      return res.json({ status: "ok", ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  });
+
   return router;
 }

@@ -116,12 +116,13 @@ code {
 .meeting {
   flex: 1 1 auto;
   display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
 .jitsiHost {
   flex: 1 1 auto;
-  min-height: calc(100vh - 56px);
+  min-height: calc(100vh - 56px - 120px);
 }
 
 .pill {
@@ -211,6 +212,45 @@ code {
 .chatStatus {
   font-size: 13px;
   opacity: 0.85;
+}
+
+.echoKeyword {
+  font-weight: 700;
+  color: #0b7a75;
+}
+
+@media (prefers-color-scheme: dark) {
+  .echoKeyword {
+    color: #5eead4;
+  }
+}
+
+.meetingCaptions {
+  flex: 0 0 auto;
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in oklab, CanvasText 12%, transparent);
+  background: color-mix(in oklab, CanvasText 4%, Canvas);
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.meetingCaptionsTitle {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  opacity: 0.75;
+}
+
+.meetingCaptionLine {
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0 0 6px;
+}
+
+.meetingCaptionLine:last-child {
+  margin-bottom: 0;
 }
 
 .chatTyping {

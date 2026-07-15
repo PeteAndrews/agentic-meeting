@@ -38,6 +38,14 @@ type ConnectionOptions = {
   enableWebsocketResume?: boolean;
 };
 
+const TTS_PRE_ROLL_MS = 250;
+const TTS_POST_DRAIN_MIN_MS = 300;
+const TTS_POST_DRAIN_MAX_MS = 800;
+
+function postPlayDrainMs(durationMs: number): number {
+  return Math.max(TTS_POST_DRAIN_MIN_MS, Math.min(TTS_POST_DRAIN_MAX_MS, durationMs * 0.25 + 150));
+}
+
 function formatJitsiError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -81,7 +89,9 @@ export class JitsiClient {
   private localAudioTracks: JitsiLocalTrack[] = [];
   private toneSource: ToneSource | null = null;
   private pcmSource: PcmAudioSource | null = null;
+  private pcmSpeechTrack: JitsiLocalTrack | null = null;
   private audioPublishInProgress = false;
+  private thinkingInProgress = false;
   private bridgeSetupPromise: Promise<BridgeMediaResult> | null = null;
 
   public getStatus() {
@@ -96,6 +106,7 @@ export class JitsiClient {
       bridgeDiagnostics: getBridgeDiagnostics(),
       mucOnlyJoin: config.disableFocusAtJoin,
       audioPublishInProgress: this.audioPublishInProgress,
+      thinkingInProgress: this.thinkingInProgress,
       jitsiLibUrl: config.jitsiLibUrl,
       jitsiServiceUrl: config.jitsiServiceUrl,
       jitsiBoshUrl: config.jitsiBoshUrl,
@@ -184,6 +195,121 @@ export class JitsiClient {
       });
     }
     return this.getStatus();
+  }
+
+  public async startThinking(roomName: string): Promise<SpeakResult> {
+    if (config.fakeJitsi) {
+      this.thinkingInProgress = true;
+      return {
+        ok: true,
+        note: `fake mode: thinking ambient simulated for ${roomName}`,
+        bridgeMedia: false,
+      };
+    }
+
+    if (!this.state.connected || this.state.roomName !== roomName || !this.room || !this.jitsi) {
+      return {
+        ok: false,
+        note: `Echo is not connected to room "${roomName}" (call POST /bot/join first)`,
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+
+    if (this.audioPublishInProgress) {
+      return {
+        ok: false,
+        note: "audio publish already in progress",
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+
+    if (this.thinkingInProgress && this.pcmSource?.isAmbientActive()) {
+      return {
+        ok: true,
+        note: "thinking ambient already playing",
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+
+    try {
+      const bridge = await this.waitForBridgeMedia();
+      if (!bridge.ready) {
+        return {
+          ok: false,
+          note: bridge.note,
+          bridgeMedia: false,
+        };
+      }
+
+      await republishLocalAudioToJvb(this.room);
+      await ensureConferenceAudioUnmuted(this.room);
+
+      const speechTrack = await this.ensurePcmSpeechTrack();
+      await republishLocalAudioToJvb(this.room);
+      await unmuteLocalAudio(this.room, speechTrack);
+      await ensureConferenceAudioUnmuted(this.room);
+
+      this.pcmSource!.startThinkingAmbient();
+      this.thinkingInProgress = true;
+
+      await postAgentEvent({
+        roomName,
+        eventType: "agent.thinking_started",
+        payload: {},
+      });
+
+      console.log("[agent-bot] thinking ambient started");
+      return {
+        ok: true,
+        note: `Thinking ambient playing in ${roomName}`,
+        bridgeMedia: true,
+      };
+    } catch (error) {
+      this.thinkingInProgress = false;
+      this.pcmSource?.stopThinkingAmbient();
+      const message = formatJitsiError(error);
+      await postAgentEvent({
+        roomName,
+        eventType: "agent.thinking_failed",
+        payload: { error: message },
+      });
+      return {
+        ok: false,
+        note: message,
+        bridgeMedia: hasBridgeMedia(this.room),
+      };
+    }
+  }
+
+  public async stopThinking(roomName?: string): Promise<SpeakResult> {
+    const activeRoom = this.state.roomName ?? roomName ?? "unknown-room";
+    const wasActive = this.thinkingInProgress || Boolean(this.pcmSource?.isAmbientActive());
+
+    this.pcmSource?.stopThinkingAmbient();
+    this.thinkingInProgress = false;
+
+    if (this.pcmSpeechTrack && this.room) {
+      try {
+        await muteLocalAudio(this.room, this.pcmSpeechTrack);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (wasActive) {
+      await postAgentEvent({
+        roomName: activeRoom,
+        eventType: "agent.thinking_stopped",
+        payload: {},
+      });
+      console.log("[agent-bot] thinking ambient stopped");
+    }
+
+    return {
+      ok: true,
+      note: wasActive ? `Thinking ambient stopped in ${activeRoom}` : "thinking ambient was not playing",
+      bridgeMedia: hasBridgeMedia(this.room),
+    };
   }
 
   public async speakTest(roomName: string): Promise<SpeakTestResult> {
@@ -324,6 +450,9 @@ export class JitsiClient {
   public async speak(input: SpeakAudioInput): Promise<SpeakResult> {
     const { roomName, audioBase64, sampleRate, text } = input;
 
+    // Always clear thinking pad before TTS so speech is not mixed/blocked.
+    await this.stopThinking(roomName);
+
     if (config.fakeJitsi) {
       return {
         ok: true,
@@ -406,36 +535,35 @@ export class JitsiClient {
       await republishLocalAudioToJvb(this.room);
       await ensureConferenceAudioUnmuted(this.room);
 
-      const pcmPlayer = new PcmAudioSource();
-      this.pcmSource = pcmPlayer;
-      let speechTrack: JitsiLocalTrack | null = null;
-      const previousTracks = [...this.localAudioTracks];
+      let speechTrack: JitsiLocalTrack;
+      try {
+        speechTrack = await this.ensurePcmSpeechTrack();
+      } catch (error) {
+        const message = formatJitsiError(error);
+        await postAgentEvent({
+          roomName,
+          eventType: "agent.speak_playback_failed",
+          payload: { error: message, text },
+        });
+        return {
+          ok: false,
+          note: message,
+          bridgeMedia: hasBridgeMedia(this.room),
+          text,
+        };
+      }
 
       try {
-        for (const old of previousTracks) {
-          try {
-            await this.room.removeTrack(old);
-          } catch {
-            // ignore
-          }
-          disposeLocalTrack(old);
-        }
-        this.localAudioTracks = [];
-
-        const mediaTrack = pcmPlayer.ensureTrack();
-        speechTrack = await createLocalAudioTrackFromMediaStream(this.jitsi, mediaTrack);
-
-        console.log("[agent-bot] adding TTS track to conference");
-        await this.room.addTrack(speechTrack);
-        this.localAudioTracks = [speechTrack];
-
         await republishLocalAudioToJvb(this.room);
         await unmuteLocalAudio(this.room, speechTrack);
         await ensureConferenceAudioUnmuted(this.room);
 
+        // Give remote participants time to subscribe before short clips start.
+        await new Promise((resolve) => setTimeout(resolve, TTS_PRE_ROLL_MS));
+
         console.log(`[agent-bot] speak playing TTS for ~${durationMs}ms`);
-        await pcmPlayer.play(pcm, sampleRate);
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await this.pcmSource!.play(pcm, sampleRate);
+        await new Promise((resolve) => setTimeout(resolve, postPlayDrainMs(durationMs)));
 
         await muteLocalAudio(this.room, speechTrack);
 
@@ -467,23 +595,44 @@ export class JitsiClient {
           text,
         };
       } finally {
-        pcmPlayer.stop();
-        this.pcmSource = null;
-
-        if (speechTrack) {
-          try {
-            await this.room?.removeTrack?.(speechTrack);
-          } catch {
-            // ignore
-          }
-          disposeLocalTrack(speechTrack);
-        }
-
-        await this.restoreSilentMic();
+        this.pcmSource?.stopFeed();
       }
     } finally {
       this.audioPublishInProgress = false;
     }
+  }
+
+  private async ensurePcmSpeechTrack(): Promise<JitsiLocalTrack> {
+    if (!this.room || !this.jitsi) {
+      throw new Error("Echo is not connected to a Jitsi room");
+    }
+
+    if (this.pcmSpeechTrack && this.pcmSource?.mediaTrackReady()) {
+      return this.pcmSpeechTrack;
+    }
+
+    this.pcmSource ??= new PcmAudioSource();
+    const mediaTrack = this.pcmSource.ensureTrack();
+    const speechTrack = await createLocalAudioTrackFromMediaStream(this.jitsi, mediaTrack);
+
+    for (const old of [...this.localAudioTracks]) {
+      try {
+        await this.room.removeTrack(old);
+      } catch {
+        // ignore
+      }
+      disposeLocalTrack(old);
+    }
+    this.localAudioTracks = [];
+
+    console.log("[agent-bot] adding persistent TTS track to conference");
+    await this.room.addTrack(speechTrack);
+    this.localAudioTracks = [speechTrack];
+    this.pcmSpeechTrack = speechTrack;
+
+    await republishLocalAudioToJvb(this.room);
+    await muteLocalAudio(this.room, speechTrack);
+    return speechTrack;
   }
 
   private async restoreSilentMic(): Promise<void> {
@@ -551,10 +700,12 @@ export class JitsiClient {
   }
 
   private async teardownLibJitsi(): Promise<void> {
+    this.thinkingInProgress = false;
     this.toneSource?.stop();
     this.toneSource = null;
     this.pcmSource?.stop();
     this.pcmSource = null;
+    this.pcmSpeechTrack = null;
     for (const track of this.localAudioTracks) {
       disposeLocalTrack(track);
     }
@@ -652,6 +803,7 @@ export class JitsiClient {
       connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_FAILED, onFailed);
       connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_DISCONNECTED, () => {
         this.state.connected = false;
+        void this.teardownLibJitsi();
       });
 
       connection.connect({ name: roomName });

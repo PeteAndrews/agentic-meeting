@@ -23,7 +23,7 @@ from app.services.agent_store import (
 from app.services.calibration_matcher import resolve_calibration_answer
 from app.services.meeting_meta_matcher import find_meeting_meta_reply
 from app.services.meeting_recap_matcher import classify_recap_intent
-from app.services.agent_speak import AgentSpeakError, speak_for_profile
+from app.services.agent_speak import AgentSpeakError, speak_for_profile, start_thinking, stop_thinking
 from app.services.agent_trigger import match_trigger, resolve_trigger_phrases
 from app.services.scenario_loader import load_scenario
 from app.storage.jsonl import now_iso, read_jsonl, safe_room_slug
@@ -31,6 +31,8 @@ from app.storage.jsonl import data_dir
 
 _lock = threading.Lock()
 _last_processed: dict[str, int] = {}
+_room_locks: dict[str, threading.Lock] = {}
+_room_locks_guard = threading.Lock()
 
 AutoSpeakSource = Literal["known_calibration", "meeting_meta", "meeting_recap"]
 
@@ -82,15 +84,29 @@ def _segment_signature(segments: list[dict[str, Any]]) -> int:
     )
 
 
-def _should_process(room_name: str, segments: list[dict[str, Any]]) -> bool:
+def _room_lock(room_name: str) -> threading.Lock:
+    with _room_locks_guard:
+        lock = _room_locks.get(room_name)
+        if lock is None:
+            lock = threading.Lock()
+            _room_locks[room_name] = lock
+        return lock
+
+
+def _already_processed(room_name: str, segments: list[dict[str, Any]]) -> bool:
     if len(segments) < 1:
-        return False
+        return True
     signature = _segment_signature(segments)
     with _lock:
-        if _last_processed.get(room_name) == signature:
-            return False
+        return _last_processed.get(room_name) == signature
+
+
+def _mark_processed(room_name: str, segments: list[dict[str, Any]]) -> None:
+    if len(segments) < 1:
+        return
+    signature = _segment_signature(segments)
+    with _lock:
         _last_processed[room_name] = signature
-    return True
 
 
 def _infer_source(profile: AgentProfile, llm_source: str | None) -> str:
@@ -164,7 +180,19 @@ def _submit_proxy_question(
     source: str,
     reason: str | None,
     now: str,
-) -> AgentPrompt:
+) -> AgentPrompt | None:
+    if profile.interventionsUsed >= profile.maxInterventions:
+        _persist_agent_event(
+            room_name,
+            "agent.intervention_cap_reached",
+            {
+                "interventionsUsed": profile.interventionsUsed,
+                "maxInterventions": profile.maxInterventions,
+                "participantId": profile.participantId,
+            },
+        )
+        return None
+
     ack = format_meeting_acknowledgment(profile)
     try:
         ack_duration_ms = speak_for_profile(room_name, profile, ack)
@@ -202,6 +230,11 @@ def _submit_proxy_question(
 
 
 def process_transcript_update(room_name: str) -> AgentPrompt | None:
+    with _room_lock(room_name):
+        return _process_transcript_update(room_name)
+
+
+def _process_transcript_update(room_name: str) -> AgentPrompt | None:
     profile = find_proxy_profile_for_room(room_name)
     if not profile or not profile.calibrationCompletedAt or not profile.scenario:
         return None
@@ -209,7 +242,7 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
         return None
 
     segments = _load_final_segments(room_name)
-    if not _should_process(room_name, segments):
+    if _already_processed(room_name, segments):
         return None
 
     last_seg = segments[-1]
@@ -229,6 +262,7 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
                 "participantId": last_seg.get("participantId"),
             },
         )
+        _mark_processed(room_name, segments)
         return None
 
     _persist_agent_event(
@@ -241,7 +275,28 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             "participantId": last_seg.get("participantId"),
         },
     )
+    start_thinking(room_name)
 
+    try:
+        return _handle_triggered_turn(
+            room_name,
+            profile,
+            segments=segments,
+            trigger_text=trigger_text,
+            matched_phrase=matched_phrase,
+        )
+    finally:
+        stop_thinking(room_name)
+
+
+def _handle_triggered_turn(
+    room_name: str,
+    profile: AgentProfile,
+    *,
+    segments: list[dict[str, Any]],
+    trigger_text: str,
+    matched_phrase: str,
+) -> AgentPrompt | None:
     now = now_iso()
     recap_intent = classify_recap_intent(trigger_text)
     if recap_intent == "repeat_last":
@@ -251,15 +306,18 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             if last_spoken
             else "I haven't said anything in this meeting yet."
         )
-        return _auto_speak_prompt(
+        result = _auto_speak_prompt(
             room_name,
             profile,
             spoken=spoken,
             trigger_text=trigger_text,
             source="meeting_recap",
             now=now,
-            event_payload={"recapKind": "repeat_last"},
+            event_payload={"recapKind": "repeat_last", "matchedPhrase": matched_phrase},
         )
+        if result is not None:
+            _mark_processed(room_name, segments)
+        return result
 
     if recap_intent == "summarize":
         spoken = summarize_meeting_so_far(
@@ -267,15 +325,18 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             segments,
             trigger_index=len(segments) - 1,
         )
-        return _auto_speak_prompt(
+        result = _auto_speak_prompt(
             room_name,
             profile,
             spoken=spoken,
             trigger_text=trigger_text,
             source="meeting_recap",
             now=now,
-            event_payload={"recapKind": "summarize"},
+            event_payload={"recapKind": "summarize", "matchedPhrase": matched_phrase},
         )
+        if result is not None:
+            _mark_processed(room_name, segments)
+        return result
 
     calibration_hit = resolve_calibration_answer(profile, trigger_text)
     if calibration_hit:
@@ -296,6 +357,7 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             "rawAnswer": answer,
             "calibrationQuestionId": question.id,
             "matchMethod": match_method,
+            "matchedPhrase": matched_phrase,
         }
         if match_method == "semantic":
             _persist_agent_event(
@@ -307,7 +369,7 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
                     "participantId": profile.participantId,
                 },
             )
-        return _auto_speak_prompt(
+        result = _auto_speak_prompt(
             room_name,
             profile,
             spoken=spoken,
@@ -316,18 +378,24 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             now=now,
             event_payload=event_payload,
         )
+        if result is not None:
+            _mark_processed(room_name, segments)
+        return result
 
     meta_reply = find_meeting_meta_reply(trigger_text)
     if meta_reply:
-        return _auto_speak_prompt(
+        result = _auto_speak_prompt(
             room_name,
             profile,
             spoken=meta_reply,
             trigger_text=trigger_text,
             source="meeting_meta",
             now=now,
-            event_payload={"metaKind": "deterministic"},
+            event_payload={"metaKind": "deterministic", "matchedPhrase": matched_phrase},
         )
+        if result is not None:
+            _mark_processed(room_name, segments)
+        return result
 
     try:
         llm_result = evaluate_meeting_turn(
@@ -342,7 +410,7 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             "agent.llm_error",
             {"error": str(exc), "participantId": profile.participantId},
         )
-        return _submit_proxy_question(
+        result = _submit_proxy_question(
             room_name,
             profile,
             trigger_text=trigger_text,
@@ -351,6 +419,8 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
             reason="Routing could not run; please reply so Echo can respond.",
             now=now,
         )
+        _mark_processed(room_name, segments)
+        return result
 
     action = str(llm_result.get("action", "wait"))
     text = str(llm_result.get("text") or "").strip()
@@ -367,18 +437,22 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
                 "participantId": profile.participantId,
             },
         )
+        _mark_processed(room_name, segments)
         return None
 
     if action == "draft_public" and source in ("known_calibration", "meeting_meta"):
-        return _auto_speak_prompt(
+        result = _auto_speak_prompt(
             room_name,
             profile,
             spoken=text,
             trigger_text=trigger_text,
             source=source,  # type: ignore[arg-type]
             now=now,
-            event_payload={"metaKind": "llm"},
+            event_payload={"metaKind": "llm", "matchedPhrase": matched_phrase},
         )
+        if result is not None:
+            _mark_processed(room_name, segments)
+        return result
 
     if action == "draft_public":
         source = "novel_topic"
@@ -393,9 +467,10 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
                 "participantId": profile.participantId,
             },
         )
+        _mark_processed(room_name, segments)
         return None
 
-    return _submit_proxy_question(
+    result = _submit_proxy_question(
         room_name,
         profile,
         trigger_text=trigger_text,
@@ -404,6 +479,8 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
         reason=reason,
         now=now,
     )
+    _mark_processed(room_name, segments)
+    return result
 
 
 def _trigger_segment_index(

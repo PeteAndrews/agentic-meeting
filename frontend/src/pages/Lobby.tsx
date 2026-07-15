@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiJson } from '../api/http'
 import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { setSession, type Session } from '../store/sessionSlice'
+import { clearSession, setSession, type Session } from '../store/sessionSlice'
 
 type ResolveTokenRequest = {
   studyToken: string
@@ -14,6 +14,7 @@ export function Lobby() {
   const [searchParams] = useSearchParams()
   const initialToken = searchParams.get('token') ?? ''
   const [token, setTokenValue] = useState(initialToken)
+  const [resolvedToken, setResolvedToken] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
 
@@ -21,7 +22,10 @@ export function Lobby() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
 
-  const canContinue = useMemo(() => !!session?.roomName, [session?.roomName])
+  const canContinue = useMemo(
+    () => !!session?.roomName && resolvedToken === token.trim(),
+    [session?.roomName, resolvedToken, token],
+  )
 
   const continueLabel = useMemo(() => {
     if (!session) return 'Continue'
@@ -37,6 +41,7 @@ export function Lobby() {
         body: JSON.stringify({ studyToken: token } satisfies ResolveTokenRequest),
       })
       dispatch(setSession(data))
+      setResolvedToken(token.trim())
       setStatus('idle')
     } catch (e) {
       setStatus('error')
@@ -66,7 +71,14 @@ export function Lobby() {
             id="token"
             className="input"
             value={token}
-            onChange={(e) => setTokenValue(e.target.value)}
+            onChange={(e) => {
+              const nextToken = e.target.value
+              setTokenValue(nextToken)
+              if (resolvedToken && nextToken.trim() !== resolvedToken) {
+                dispatch(clearSession())
+                setResolvedToken(null)
+              }
+            }}
             placeholder="e.g., pilot-trip-C"
             autoComplete="off"
           />

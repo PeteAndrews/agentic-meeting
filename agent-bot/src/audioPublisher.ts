@@ -13,4 +13,12 @@ export class AudioPublisher {
   public async speak(input: SpeakAudioInput): Promise<SpeakResult> {
     return this.jitsiClient.speak(input);
   }
+
+  public async startThinking(roomName: string): Promise<SpeakResult> {
+    return this.jitsiClient.startThinking(roomName);
+  }
+
+  public async stopThinking(roomName?: string): Promise<SpeakResult> {
+    return this.jitsiClient.stopThinking(roomName);
+  }
 }

@@ -120,6 +120,16 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
     if not profile:
         raise HTTPException(status_code=404, detail="Agent profile not found")
 
+    draft = create_draft_from_proxy_reply(
+        roomName,
+        profile,
+        proxy_reply=body.text,
+        source=prompt.source,
+        trigger_segment_text=prompt.triggerSegmentText,
+        status=AgentPromptStatus.APPROVED,
+    )
+    _speak_approved_text(roomName, draft.text, profile)
+
     updated = update_prompt(
         roomName,
         prompt_id,
@@ -137,15 +147,6 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
     )
     save_profile(profile)
 
-    draft = create_draft_from_proxy_reply(
-        roomName,
-        profile,
-        proxy_reply=body.text,
-        source=prompt.source,
-        trigger_segment_text=prompt.triggerSegmentText,
-        status=AgentPromptStatus.APPROVED,
-    )
-    _speak_approved_text(roomName, draft.text, profile)
     spoken_draft = update_prompt(roomName, draft.id, status=AgentPromptStatus.SPOKEN)
     if not spoken_draft:
         raise HTTPException(status_code=404, detail="Draft prompt not found")

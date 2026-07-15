@@ -76,3 +76,20 @@ def speak_for_profile(room_name: str, profile: AgentProfile, text: str) -> int:
         voice_gender=profile.ttsVoiceGender,
         profile=profile,
     )
+
+
+def start_thinking(room_name: str) -> None:
+    """Best-effort: play soft ambient while Echo is processing."""
+    try:
+        _post_json("/bot/thinking/start", {"roomName": room_name}, timeout=30.0)
+    except AgentSpeakError:
+        # Don't block the agent loop if ambient feedback fails.
+        return
+
+
+def stop_thinking(room_name: str) -> None:
+    """Best-effort: stop processing ambient before speech or idle."""
+    try:
+        _post_json("/bot/thinking/stop", {"roomName": room_name}, timeout=15.0)
+    except AgentSpeakError:
+        return

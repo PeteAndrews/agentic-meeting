@@ -26,7 +26,10 @@ function loadJitsiExternalApi(): Promise<void> {
     script.src = scriptUrl
     script.async = true
     script.onload = () => resolve()
-    script.onerror = () => reject(new Error(`Failed to load Jitsi external_api.js from ${scriptUrl}`))
+    script.onerror = () => {
+      jitsiExternalApiPromise = null
+      reject(new Error(`Failed to load Jitsi external_api.js from ${scriptUrl}`))
+    }
     document.head.appendChild(script)
   })
 

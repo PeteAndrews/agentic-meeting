@@ -28,19 +28,12 @@ def load_profile(room_name: str, participant_id: str) -> AgentProfile | None:
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    profile = AgentProfile.model_validate(data)
-    normalized = _normalize_legacy_profile(profile)
-    if normalized != profile:
-        save_profile(normalized)
-        return normalized
-    return profile
+    return AgentProfile.model_validate(data)
 
 
 def _normalize_legacy_profile(profile: AgentProfile) -> AgentProfile:
-    """Lift old study profiles off the default cap of 3 interventions."""
-    if profile.maxInterventions >= 999:
-        return profile
-    return profile.model_copy(update={"maxInterventions": 999, "updatedAt": now_iso()})
+    """Legacy hook retained for callers; profiles keep their configured cap."""
+    return profile
 
 
 def save_profile(profile: AgentProfile) -> AgentProfile:
@@ -75,10 +68,6 @@ def find_proxy_profile_for_room(room_name: str) -> AgentProfile | None:
         reverse=True,
     )
     best = candidates[0]
-    normalized = _normalize_legacy_profile(best)
-    if normalized != best:
-        save_profile(normalized)
-        return normalized
     return best
 
 

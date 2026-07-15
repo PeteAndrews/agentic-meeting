@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { apiJson, formatApiError } from '../api/http'
+import { HighlightedText } from './HighlightedText'
 import {
   CALIBRATION_COMPLETE,
   CALIBRATION_INTRO,
@@ -828,7 +829,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
             <div
               className={`chatBubble${line.variant === 'passage' ? ' chatBubblePassage' : ''}`}
             >
-              {line.text}
+              <HighlightedText text={line.text} keywords={[agentName, 'Echo']} />
             </div>
           </div>
         ))}
@@ -842,10 +843,17 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
               </div>
               {prompt.triggerSegmentText && (
                 <p className="muted" style={{ marginBottom: 8 }}>
-                  Re: "{prompt.triggerSegmentText}"
+                  Re: "
+                  <HighlightedText
+                    text={prompt.triggerSegmentText}
+                    keywords={[agentName, 'Echo']}
+                  />
+                  "
                 </p>
               )}
-              <div className="chatBubble">{prompt.text}</div>
+              <div className="chatBubble">
+                <HighlightedText text={prompt.text} keywords={[agentName, 'Echo']} />
+              </div>
               <textarea
                 className="input chatInput"
                 rows={3}

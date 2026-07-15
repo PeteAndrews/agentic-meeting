@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 
 import { apiJson } from '../api/http'
+import { HighlightedText } from '../components/HighlightedText'
 import { JitsiEmbed } from '../components/JitsiEmbed'
 import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
@@ -50,6 +51,8 @@ export function Meeting() {
   const [configStatus, setConfigStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null)
   const [sttDesired, setSttDesired] = useState(false)
+  const [sttRestartNonce, setSttRestartNonce] = useState(0)
+  const [liveCaptions, setLiveCaptions] = useState<Array<{ id: string; text: string }>>([])
 
   const startWithAudioMuted = useMemo(() => session?.role === 'silent', [session?.role])
   const sttSupported = useMemo(
@@ -228,6 +231,11 @@ export function Meeting() {
           const startMs = currentUtteranceStartMsRef.current ?? nowMs
           currentUtteranceStartMsRef.current = null
 
+          setLiveCaptions((prev) => {
+            const next = [...prev, { id: `${startMs}-${nowMs}-${prev.length}`, text }]
+            return next.slice(-8)
+          })
+
           void postTranscriptSegment({
             roomName: session.roomName,
             participantId: session.participantId,
@@ -258,15 +266,11 @@ export function Meeting() {
       currentUtteranceStartMsRef.current = null
       if (stopped) return
       if (!sttDesiredRef.current) return
-      // Chrome frequently ends recognition after pauses; auto-restart while enabled.
+      // Chrome frequently ends recognition after pauses; recreate the instance.
       setTimeout(() => {
         if (!sttDesiredRef.current) return
-        try {
-          setSttRunState('starting')
-          rec.start()
-        } catch {
-          // ignore start races
-        }
+        setSttRunState('starting')
+        setSttRestartNonce((n) => n + 1)
       }, 250)
     }
 
@@ -298,7 +302,7 @@ export function Meeting() {
       sttRecRef.current = null
       currentUtteranceStartMsRef.current = null
     }
-  }, [session, sessionConfig, sttSupported, sttAllowedByRole, sttEnabledByConfig, sttDesired])
+  }, [session, sessionConfig, sttSupported, sttAllowedByRole, sttEnabledByConfig, sttDesired, sttRestartNonce])
 
   function toggleStt() {
     if (!session) return
@@ -403,6 +407,16 @@ export function Meeting() {
             void logEvent(`jitsi.${name}`, payload)
           }}
         />
+        {liveCaptions.length > 0 && (
+          <div className="meetingCaptions" aria-live="polite">
+            <div className="meetingCaptionsTitle">Live transcript</div>
+            {liveCaptions.map((line) => (
+              <p key={line.id} className="meetingCaptionLine">
+                <HighlightedText text={line.text} />
+              </p>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   )

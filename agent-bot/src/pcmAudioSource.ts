@@ -1,5 +1,6 @@
 import wrtc from "@roamhq/wrtc";
 
+import { generateThinkingAmbientFrame } from "./thinkingAmbient.js";
 import { patchTrackForLibJitsi } from "./webrtcAdapter.js";
 
 const { RTCAudioSource } = wrtc.nonstandard;
@@ -27,6 +28,9 @@ export function upsamplePcmTo48k(pcm: Int16Array): Int16Array {
     out[outIndex + 1] = Math.round((current + next) / 2);
     outIndex += 2;
   }
+  const last = pcm[pcm.length - 1] ?? 0;
+  out[outIndex] = last;
+  out[outIndex + 1] = last;
   return out;
 }
 
@@ -48,6 +52,9 @@ export class PcmAudioSource {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private playResolve: (() => void) | null = null;
   private playStartMs = 0;
+  private tailFramesRemaining = 0;
+  private ambientTimer: ReturnType<typeof setInterval> | null = null;
+  private ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
 
   public ensureTrack(): MediaStreamTrack {
     if (this.track && this.track.readyState !== "ended") {
@@ -59,9 +66,38 @@ export class PcmAudioSource {
     return track;
   }
 
-  /** Feed PCM until exhausted; resolves when the final frame is sent. */
-  public play(pcm: Int16Array, inputSampleRate: number): Promise<void> {
+  public isAmbientActive(): boolean {
+    return this.ambientTimer != null;
+  }
+
+  /** Soft looping pad while Echo is processing; interrupted by play()/stopFeed(). */
+  public startThinkingAmbient(): void {
+    if (this.ambientTimer) {
+      return;
+    }
     this.stopFeed();
+    this.sampleRate = TARGET_SAMPLE_RATE;
+    this.frameSamples = Math.max(1, Math.floor(this.sampleRate / (1000 / FRAME_MS)));
+    this.ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
+    this.ambientTimer = setInterval(() => {
+      const samples = generateThinkingAmbientFrame(this.frameSamples, this.ambientPhase);
+      this.source.onData({ samples, sampleRate: this.sampleRate });
+    }, FRAME_MS);
+  }
+
+  public stopThinkingAmbient(): void {
+    if (this.ambientTimer) {
+      clearInterval(this.ambientTimer);
+      this.ambientTimer = null;
+    }
+    this.ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
+  }
+
+  /** Feed PCM until exhausted; resolves after tail silence is paced out. */
+  public play(pcm: Int16Array, inputSampleRate: number): Promise<void> {
+    this.stopThinkingAmbient();
+    this.stopFeed();
+    this.tailFramesRemaining = 0;
 
     const normalized = inputSampleRate === 24_000 ? upsamplePcmTo48k(pcm) : pcm;
     this.sampleRate = inputSampleRate === 24_000 ? TARGET_SAMPLE_RATE : inputSampleRate;
@@ -80,10 +116,12 @@ export class PcmAudioSource {
   }
 
   public emitTailSilence(frameCount = 8): void {
+    this.tailFramesRemaining = frameCount;
+  }
+
+  private emitOneTailFrame(): void {
     const silent = new Int16Array(this.frameSamples);
-    for (let i = 0; i < frameCount; i += 1) {
-      this.source.onData({ samples: silent, sampleRate: this.sampleRate });
-    }
+    this.source.onData({ samples: silent, sampleRate: this.sampleRate });
   }
 
   public mediaTrackReady(): boolean {
@@ -91,12 +129,14 @@ export class PcmAudioSource {
   }
 
   public stopFeed(): void {
+    this.stopThinkingAmbient();
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     this.offset = 0;
     this.playStartMs = 0;
+    this.tailFramesRemaining = 0;
     const resolve = this.playResolve;
     this.playResolve = null;
     resolve?.();
@@ -140,7 +180,17 @@ export class PcmAudioSource {
     this.drainToTarget();
 
     if (this.offset >= this.pcm.length) {
-      this.emitTailSilence();
+      if (this.tailFramesRemaining === 0) {
+        this.emitTailSilence();
+      }
+      if (this.tailFramesRemaining > 0) {
+        this.emitOneTailFrame();
+        this.tailFramesRemaining -= 1;
+        if (this.tailFramesRemaining > 0) {
+          this.timer = setTimeout(() => this.scheduleTick(), FRAME_MS);
+          return;
+        }
+      }
       this.finishPlay();
       return;
     }
