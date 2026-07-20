@@ -11,30 +11,49 @@ from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 logger = logging.getLogger(__name__)
 
+_dirty: dict[str, bool] = {}
+_workers: dict[str, threading.Thread] = {}
+_schedule_guard = threading.Lock()
+
+
 def segments_path(room_name: str) -> Path:
     return data_dir() / "transcripts" / f"{safe_room_slug(room_name)}.segments.jsonl"
 
 
-def _run_transcript_agent_loop(room_name: str) -> None:
-    try:
-        logger.info("Running Echo agent loop after final transcript in room %s", room_name)
-        process_transcript_update(room_name)
-    except Exception:  # noqa: BLE001
-        logger.exception("Agent loop failed after transcript segment for room %s", room_name)
+def _run_coalesced_agent_loop(room_name: str) -> None:
+    """Process a room until no new finals arrive while the previous pass ran."""
+    while True:
+        with _schedule_guard:
+            if not _dirty.get(room_name):
+                _workers.pop(room_name, None)
+                return
+            _dirty[room_name] = False
+        try:
+            logger.info("Running Echo agent loop after final transcript in room %s", room_name)
+            process_transcript_update(room_name)
+        except Exception:  # noqa: BLE001
+            logger.exception("Agent loop failed after transcript segment for room %s", room_name)
 
 
 def schedule_transcript_agent_loop(room_name: str) -> None:
-    """Run Echo trigger handling off the STT/WebSocket event loop."""
-    thread = threading.Thread(
-        target=_run_transcript_agent_loop,
-        args=(room_name,),
-        name=f"agent-loop-{safe_room_slug(room_name)}",
-        daemon=True,
-    )
-    thread.start()
+    """Coalesce bursts of final segments into one worker per room."""
+    with _schedule_guard:
+        _dirty[room_name] = True
+        existing = _workers.get(room_name)
+        if existing is not None and existing.is_alive():
+            return
+        thread = threading.Thread(
+            target=_run_coalesced_agent_loop,
+            args=(room_name,),
+            name=f"agent-loop-{safe_room_slug(room_name)}",
+            daemon=True,
+        )
+        _workers[room_name] = thread
+        thread.start()
 
 
-def append_transcript_segment(    body: TranscriptSegmentRequest,
+def append_transcript_segment(
+    body: TranscriptSegmentRequest,
     *,
     source: str | None = None,
 ) -> None:

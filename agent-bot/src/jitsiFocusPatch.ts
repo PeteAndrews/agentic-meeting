@@ -139,8 +139,3 @@ export function patchConferenceMediaHandlers(conference: any): void {
   conference.__agentBotMediaPatched = true;
   console.log("[agent-bot] patched conference media handlers (isFocus + incoming JVB)");
 }
-
-/** @deprecated use patchConferenceMediaHandlers */
-export function patchConferenceFocusCheck(conference: any): void {
-  patchConferenceMediaHandlers(conference);
-}

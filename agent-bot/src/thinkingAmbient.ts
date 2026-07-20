@@ -1,21 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import { config } from "./config.js";
-
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+import { agentBotRoot } from "./loadEnv.js";
 
 const DEFAULT_WAITING_AUDIO_NAMES = ["waiting-ambient.mp3", "waiting-sound.mp3", "waiting-ambient.wav", "waiting-sound.wav"] as const;
-
-function agentBotRoot(): string {
-  const parent = resolve(MODULE_DIR, "..");
-  if (parent.endsWith(`${sep}dist`) || parent.endsWith("/dist") || parent.endsWith("\\dist")) {
-    return resolve(parent, "..");
-  }
-  return parent;
-}
 
 function defaultWaitingAudioPath(): string {
   const assetsDir = resolve(agentBotRoot(), "assets");
@@ -122,17 +112,28 @@ export function loadThinkingAmbientPcm(): Int16Array | null {
   }
 
   const evenBytes = raw.byteLength - (raw.byteLength % 2);
-  cachedFilePcm = new Int16Array(raw.buffer, raw.byteOffset, evenBytes / 2);
+  // Copy into an aligned ArrayBuffer so Int16Array construction is always safe.
+  const aligned = Buffer.allocUnsafe(evenBytes);
+  raw.copy(aligned, 0, 0, evenBytes);
+  cachedFilePcm = new Int16Array(aligned.buffer, aligned.byteOffset, evenBytes / 2);
   console.log(
     `[agent-bot] Loaded waiting audio (${cachedFilePcm.length} samples @ 48 kHz) from ${audioPath}`,
   );
   return cachedFilePcm;
 }
 
+const scaledPcmCache = new Map<number, Int16Array>();
+
 /** Apply linear gain once at load so playback avoids per-frame scaling. */
 export function scaleThinkingAmbientPcm(pcm: Int16Array, gain: number): Int16Array {
   const clampedGain = Math.max(0, Math.min(2, gain));
+  const cacheKey = Math.round(clampedGain * 1000) / 1000;
+  const cached = scaledPcmCache.get(cacheKey);
+  if (cached && cached.length === pcm.length) {
+    return cached;
+  }
   if (clampedGain === 1) {
+    scaledPcmCache.set(cacheKey, pcm);
     return pcm;
   }
   const out = new Int16Array(pcm.length);
@@ -140,7 +141,21 @@ export function scaleThinkingAmbientPcm(pcm: Int16Array, gain: number): Int16Arr
     const scaled = Math.round((pcm[i] ?? 0) * clampedGain);
     out[i] = Math.max(-32_768, Math.min(32_767, scaled));
   }
+  scaledPcmCache.set(cacheKey, out);
   return out;
+}
+
+/** Decode waiting audio at process start so first thinking start is not blocked. */
+export function preloadThinkingAmbient(): void {
+  try {
+    const pcm = loadThinkingAmbientPcm();
+    if (pcm) {
+      const gain = Number.isFinite(config.waitingAudioGain) ? config.waitingAudioGain : 0.35;
+      scaleThinkingAmbientPcm(pcm, gain);
+    }
+  } catch (error) {
+    console.warn("[agent-bot] Waiting audio preload failed:", error);
+  }
 }
 
 /** Read a frame from a looping PCM buffer at an absolute sample offset. */

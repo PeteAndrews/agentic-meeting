@@ -31,11 +31,6 @@ def load_profile(room_name: str, participant_id: str) -> AgentProfile | None:
     return AgentProfile.model_validate(data)
 
 
-def _normalize_legacy_profile(profile: AgentProfile) -> AgentProfile:
-    """Legacy hook retained for callers; profiles keep their configured cap."""
-    return profile
-
-
 def save_profile(profile: AgentProfile) -> AgentProfile:
     path = profile_path(profile.roomName, profile.participantId)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,10 +71,7 @@ def _prompts_path(room_name: str) -> Path:
 
 
 def load_prompts(room_name: str) -> list[AgentPrompt]:
-    try:
-        rows = read_jsonl(_prompts_path(room_name))
-    except FileNotFoundError:
-        return []
+    rows = read_jsonl(_prompts_path(room_name))
     prompts: list[AgentPrompt] = []
     for row in rows:
         try:
@@ -90,14 +82,15 @@ def load_prompts(room_name: str) -> list[AgentPrompt]:
 
 
 def save_prompt(room_name: str, prompt: AgentPrompt) -> AgentPrompt:
-    path = _prompts_path(room_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(prompt.model_dump_json() + "\n")
+    from app.storage.jsonl import append_jsonl
+
+    append_jsonl(_prompts_path(room_name), prompt.model_dump(mode="json"))
     return prompt
 
 
 def update_prompt(room_name: str, prompt_id: str, **updates: Any) -> AgentPrompt | None:
+    from app.storage.jsonl import invalidate_jsonl_cache
+
     prompts = load_prompts(room_name)
     updated: AgentPrompt | None = None
     rebuilt: list[AgentPrompt] = []
@@ -114,6 +107,7 @@ def update_prompt(room_name: str, prompt_id: str, **updates: Any) -> AgentPrompt
     with path.open("w", encoding="utf-8") as fh:
         for prompt in rebuilt:
             fh.write(prompt.model_dump_json() + "\n")
+    invalidate_jsonl_cache(path)
     return updated
 
 

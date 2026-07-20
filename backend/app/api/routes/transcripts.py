@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -121,7 +121,7 @@ def export_transcript(
         return {
             "roomName": roomName,
             "finalOnly": finalOnly,
-            "exportedAt": datetime.utcnow().isoformat() + "Z",
+            "exportedAt": datetime.now(timezone.utc).isoformat(),
             "count": len(timeline),
             "segments": timeline,
         }

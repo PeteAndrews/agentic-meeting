@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-import os
-import socket
-import urllib.error
-import urllib.request
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -22,55 +19,40 @@ from app.domain.models import (
 )
 from app.services.agent_join import join_agent_room
 from app.services.agent_store import find_proxy_profile_for_room
+from app.services.http_client import HttpClientError, get_json_from_bot, post_json_to_bot
 from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
 
 
-def _agent_bot_base_url() -> str:
-    return os.environ.get("AGENT_BOT_BASE_URL", "http://127.0.0.1:3001").rstrip("/")
-
-
 def _post_json(path: str, payload: dict[str, Any], timeout: float = 10) -> dict[str, Any]:
-    url = f"{_agent_bot_base_url()}{path}"
-    req = urllib.request.Request(
-        url=url,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(payload).encode("utf-8"),
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content = resp.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8") or str(exc)
-        try:
-            parsed = json.loads(detail) if detail else {}
-        except json.JSONDecodeError:
-            parsed = {"raw": detail}
-        if exc.code == 409:
-            note = parsed.get("note") if isinstance(parsed, dict) else None
-            raise HTTPException(status_code=409, detail=note or parsed) from exc
-        raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
-    except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
-        reason = getattr(exc, "reason", str(exc))
+        return post_json_to_bot(path, payload, timeout=timeout)
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            detail = exc.body or str(exc)
+            try:
+                parsed = json.loads(detail) if detail else {}
+            except json.JSONDecodeError:
+                parsed = {"raw": detail}
+            if exc.status_code == 409:
+                note = parsed.get("note") if isinstance(parsed, dict) else None
+                raise HTTPException(status_code=409, detail=note or parsed) from exc
+            raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
+        reason = exc.reason or str(exc)
         raise HTTPException(status_code=503, detail=f"Agent-bot unavailable: {reason}") from exc
 
 
 def _get_json(path: str) -> dict[str, Any]:
-    url = f"{_agent_bot_base_url()}{path}"
-    req = urllib.request.Request(url=url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            content = resp.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8") or str(exc)
-        raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise HTTPException(status_code=503, detail=f"Agent-bot unavailable: {exc.reason}") from exc
+        return get_json_from_bot(path, timeout=10.0)
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            detail = exc.body or str(exc)
+            raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
+        reason = exc.reason or str(exc)
+        raise HTTPException(status_code=503, detail=f"Agent-bot unavailable: {reason}") from exc
 
 
 def _backend_event(room_name: str, event_type: str, payload: dict[str, Any]) -> LogEventRequest:
@@ -79,7 +61,7 @@ def _backend_event(room_name: str, event_type: str, payload: dict[str, Any]) -> 
         participantId="agent-c",
         role=Role.AGENT,
         condition=Condition.HA,
-        tsMs=int(__import__("time").time() * 1000),
+        tsMs=int(time.time() * 1000),
         eventType=event_type,
         payload={"loggedAt": now_iso(), **payload},
     )

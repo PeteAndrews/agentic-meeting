@@ -93,13 +93,15 @@ export class JitsiClient {
   private audioPublishInProgress = false;
   private thinkingInProgress = false;
   private bridgeSetupPromise: Promise<BridgeMediaResult> | null = null;
+  private joinInFlight: Promise<ReturnType<JitsiClient["getStatus"]>> | null = null;
+  private onConnectionDisconnected: (() => void) | null = null;
 
   public getStatus() {
     return {
       connected: this.state.connected,
       roomName: this.state.roomName,
       displayName: this.state.displayName,
-      phase: "phase_5c",
+      phase: "ready",
       mode: this.state.mode,
       lastError: this.state.lastError,
       bridgeMedia: hasBridgeMedia(this.room),
@@ -114,6 +116,16 @@ export class JitsiClient {
   }
 
   public async join(roomName: string, displayName?: string) {
+    if (this.joinInFlight) {
+      return this.joinInFlight;
+    }
+    this.joinInFlight = this.joinInternal(roomName, displayName).finally(() => {
+      this.joinInFlight = null;
+    });
+    return this.joinInFlight;
+  }
+
+  private async joinInternal(roomName: string, displayName?: string) {
     const finalDisplayName = displayName ?? config.defaultDisplayName;
     this.state.displayName = finalDisplayName;
 
@@ -710,6 +722,17 @@ export class JitsiClient {
       disposeLocalTrack(track);
     }
     this.localAudioTracks = [];
+    if (this.connection && this.onConnectionDisconnected && this.jitsi) {
+      try {
+        this.connection.removeEventListener(
+          this.jitsi.events.connection.CONNECTION_DISCONNECTED,
+          this.onConnectionDisconnected,
+        );
+      } catch {
+        // ignore
+      }
+    }
+    this.onConnectionDisconnected = null;
     if (this.room?.leave) {
       try {
         this.room.leave();
@@ -728,6 +751,8 @@ export class JitsiClient {
     this.connection = null;
     this.jitsi = null;
     this.bridgeSetupPromise = null;
+    this.state.connected = false;
+    this.state.roomName = null;
   }
 
   private buildConnectionOptions(domain: string, serviceUrl: string): ConnectionOptions {
@@ -801,10 +826,13 @@ export class JitsiClient {
 
       connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_ESTABLISHED, onEstablished);
       connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_FAILED, onFailed);
-      connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_DISCONNECTED, () => {
+      const onDisconnected = () => {
         this.state.connected = false;
+        this.state.roomName = null;
         void this.teardownLibJitsi();
-      });
+      };
+      this.onConnectionDisconnected = onDisconnected;
+      connection.addEventListener(JitsiMeetJS.events.connection.CONNECTION_DISCONNECTED, onDisconnected);
 
       connection.connect({ name: roomName });
     });
@@ -914,19 +942,23 @@ export class JitsiClient {
     });
 
     room.on(JitsiMeetJS.events.conference.TRACK_ADDED, (track: unknown) => {
-      console.log("[agent-bot] conference TRACK_ADDED", track);
+      if (config.verboseConferenceLogs) {
+        console.log("[agent-bot] conference TRACK_ADDED", track);
+      }
     });
 
     room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, (...args: unknown[]) => {
       console.error("[agent-bot] CONFERENCE_FAILED:", ...args);
     });
 
-    const conferenceEvents = JitsiMeetJS.events.conference as Record<string, string>;
-    for (const [key, eventName] of Object.entries(conferenceEvents)) {
-      if (/FOCUS|FAIL|ERROR|MEDIA_SESSION|JINGLE|SESSION/i.test(key)) {
-        room.on(eventName, (...args: unknown[]) => {
-          console.warn(`[agent-bot] conference event ${key}:`, ...args);
-        });
+    if (config.verboseConferenceLogs) {
+      const conferenceEvents = JitsiMeetJS.events.conference as Record<string, string>;
+      for (const [key, eventName] of Object.entries(conferenceEvents)) {
+        if (/FOCUS|FAIL|ERROR|MEDIA_SESSION|JINGLE|SESSION/i.test(key)) {
+          room.on(eventName, (...args: unknown[]) => {
+            console.warn(`[agent-bot] conference event ${key}:`, ...args);
+          });
+        }
       }
     }
 
@@ -934,11 +966,16 @@ export class JitsiClient {
     const joinSuccessEvent = JitsiMeetJS.events.conference.CONFERENCE_JOINED;
 
     await new Promise<void>((resolve, reject) => {
+      let onJoined: () => void;
+      let onConferenceFailed: (err: unknown) => void;
+
       const timeout = setTimeout(() => {
+        room.off(joinSuccessEvent, onJoined);
+        room.off(JitsiMeetJS.events.conference.CONFERENCE_FAILED, onConferenceFailed);
         reject(new Error(`Timed out joining conference room "${roomName}"`));
       }, config.conferenceJoinTimeoutMs);
 
-      const onJoined = () => {
+      onJoined = () => {
         clearTimeout(timeout);
         room.off(joinSuccessEvent, onJoined);
         room.off(JitsiMeetJS.events.conference.CONFERENCE_FAILED, onConferenceFailed);
@@ -950,7 +987,7 @@ export class JitsiClient {
         resolve();
       };
 
-      const onConferenceFailed = (err: unknown) => {
+      onConferenceFailed = (err: unknown) => {
         clearTimeout(timeout);
         room.off(joinSuccessEvent, onJoined);
         room.off(JitsiMeetJS.events.conference.CONFERENCE_FAILED, onConferenceFailed);

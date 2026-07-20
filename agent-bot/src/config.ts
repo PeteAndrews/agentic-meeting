@@ -39,4 +39,6 @@ export const config = {
   /** Linear gain applied to the waiting audio loop (default 0.35). */
   waitingAudioGain: Number(process.env.AGENT_BOT_WAITING_AUDIO_GAIN ?? 0.35),
   ffmpegPath: process.env.FFMPEG_PATH?.trim() || "ffmpeg",
+  /** Extra conference media/session event logging (noisy). */
+  verboseConferenceLogs: (process.env.AGENT_BOT_VERBOSE_CONFERENCE ?? "false").toLowerCase() === "true",
 };

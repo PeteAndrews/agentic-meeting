@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.request
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -26,33 +23,10 @@ from app.services.agent_store import (
     update_prompt,
 )
 from app.services.agent_loop import create_draft_from_proxy_reply
-from app.services.agent_speak import AgentSpeakError, speak_for_profile, speak_in_room, start_thinking, stop_thinking
+from app.services.agent_speak import AgentSpeakError, speak_in_room, start_thinking, stop_thinking
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
-
-
-def _agent_bot_base_url() -> str:
-    return os.environ.get("AGENT_BOT_BASE_URL", "http://127.0.0.1:3001").rstrip("/")
-
-
-def _post_json(path: str, payload: dict[str, Any], timeout: float = 10) -> dict[str, Any]:
-    url = f"{_agent_bot_base_url()}{path}"
-    req = urllib.request.Request(
-        url=url,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(payload).encode("utf-8"),
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content = resp.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8") or str(exc)
-        raise HTTPException(status_code=502, detail=f"Agent-bot HTTP error: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise HTTPException(status_code=503, detail=f"Agent-bot unavailable: {exc.reason}") from exc
 
 
 def _events_path(room_name: str):
@@ -65,7 +39,7 @@ def _persist_event(room_name: str, event_type: str, payload: dict[str, Any]) -> 
         participantId="agent-c",
         role=Role.AGENT,
         condition=Condition.HA,
-        tsMs=int(__import__("time").time() * 1000),
+        tsMs=int(time.time() * 1000),
         eventType=event_type,
         payload={"loggedAt": now_iso(), **payload},
     )
@@ -132,6 +106,10 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
             status=AgentPromptStatus.APPROVED,
         )
         _speak_approved_text(roomName, draft.text, profile)
+    except HTTPException:
+        if draft is not None:
+            update_prompt(roomName, draft.id, status=AgentPromptStatus.REJECTED)
+        raise
     finally:
         stop_thinking(roomName)
 

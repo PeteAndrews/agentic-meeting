@@ -19,22 +19,9 @@ import {
   VOICE_SAMPLE_SAVED,
 } from '../constants/onboarding'
 import type { Session, VoiceOutputMode } from '../store/sessionSlice'
+import { type AgentProfile } from '../types/agent'
 import { isAffirmative } from '../utils/chatIntent'
 import { randomBetween, randomTypingLabel, wait } from '../utils/chatTiming'
-
-type AgentProfile = {
-  roomName: string
-  participantId: string
-  voiceOutputMode: VoiceOutputMode
-  voiceSampleStored: boolean
-  scenario?: string | null
-  droppedQuestionIndex?: number | null
-  calibrationAnswers?: Record<string, string>
-  calibrationCompletedAt: string | null
-  interventionsUsed?: number
-  maxInterventions?: number
-  updatedAt: string | null
-}
 
 type CalibrationQuestion = {
   id: string
@@ -306,7 +293,19 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   const loadAgentStatus = useCallback(async () => {
     try {
       const status = await apiJson<AgentStatus>('/api/agent/status')
-      setAgentStatus(status)
+      setAgentStatus((prev) => {
+        if (
+          prev &&
+          prev.connected === status.connected &&
+          prev.roomName === status.roomName &&
+          prev.displayName === status.displayName &&
+          prev.phase === status.phase &&
+          prev.mode === status.mode
+        ) {
+          return prev
+        }
+        return status
+      })
       return status
     } catch {
       setAgentStatus(null)
@@ -321,7 +320,24 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
         participantId: session.participantId,
       })
       const result = await apiJson<{ prompts: AgentPrompt[] }>(`/api/agent/prompts?${query.toString()}`)
-      setPrompts(result.prompts)
+      setPrompts((prev) => {
+        if (
+          prev.length === result.prompts.length &&
+          prev.every((p, i) => {
+            const next = result.prompts[i]
+            return (
+              next &&
+              p.id === next.id &&
+              p.status === next.status &&
+              p.text === next.text &&
+              p.updatedAt === next.updatedAt
+            )
+          })
+        ) {
+          return prev
+        }
+        return result.prompts
+      })
 
       for (const prompt of result.prompts) {
         if (seenPromptIdsRef.current.has(prompt.id)) continue
@@ -331,14 +347,10 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
             pushAgent(prompt.text)
           }
         }
+        // pending_approval public drafts are shown as interactive cards below;
+        // do not also push a duplicate chat line.
         if (prompt.status === 'pending_approval') {
           seenPromptIdsRef.current.add(prompt.id)
-          if (prompt.kind === 'public_draft') {
-            const meetingLine = prompt.triggerSegmentText
-              ? `Draft to speak in the meeting (re: "${prompt.triggerSegmentText}")`
-              : 'Draft to speak in the meeting'
-            pushAgent(`${meetingLine}:\n\n${prompt.text}`)
-          }
         }
       }
     } catch {
@@ -630,9 +642,9 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
     }
   }
 
-  async function handleJoinConfirm() {
+  async function handleJoinConfirm(explicitReply?: string) {
     if (busy || introPlaying || typingIndicator || step !== 'awaiting_join_confirm') return
-    const reply = draft.trim()
+    const reply = (explicitReply ?? draft).trim()
     if (!reply) return
 
     pushUser(reply)
@@ -941,8 +953,7 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
                 className="button secondary"
                 disabled={composerLocked}
                 onClick={() => {
-                  setDraft('Yes')
-                  void handleJoinConfirm()
+                  void handleJoinConfirm('Yes')
                 }}
               >
                 Yes

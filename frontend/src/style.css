@@ -28,6 +28,7 @@ html.meeting-layout .page {
   height: 100%;
   min-height: 100dvh;
   overflow: hidden;
+  position: relative;
 }
 
 .topbar {
@@ -36,6 +37,21 @@ html.meeting-layout .page {
   align-items: center;
   padding: 12px 16px;
   border-bottom: 1px solid color-mix(in oklab, CanvasText 15%, transparent);
+}
+
+html.meeting-layout .topbarActionsOnly {
+  padding: 8px 12px;
+  border-bottom: none;
+  background: transparent;
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+html.meeting-layout .topbarActionsOnly button {
+  pointer-events: auto;
 }
 
 .brand {
@@ -157,19 +173,6 @@ html.meeting-layout .page {
 
 .pill.warn {
   border-color: color-mix(in oklab, orange 60%, transparent);
-}
-
-.onboarding,
-.calibration {
-  margin-top: 20px;
-}
-
-.onboardingHeader,
-.calibrationHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .agentConsoleMain {
@@ -311,18 +314,4 @@ html.meeting-layout .page {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.voiceSample {
-  margin-top: 14px;
-}
-
-.readAloudPassage {
-  margin: 16px 0;
-  padding: 14px 16px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in oklab, CanvasText 14%, transparent);
-  background: color-mix(in oklab, CanvasText 5%, Canvas);
-  line-height: 1.55;
-  white-space: pre-wrap;
 }

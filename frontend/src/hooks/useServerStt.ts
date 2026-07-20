@@ -87,6 +87,13 @@ export async function startServerStt(
   })
 
   const audioContext = new AudioContext()
+  if (audioContext.state === 'suspended') {
+    try {
+      await audioContext.resume()
+    } catch {
+      // Autoplay policies may still leave it suspended until a later gesture.
+    }
+  }
   const source = sourceNode(audioContext, stream)
   const processor = audioContext.createScriptProcessor(4096, 1, 1)
   const gain = audioContext.createGain()

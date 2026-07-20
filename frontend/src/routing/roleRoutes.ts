@@ -11,7 +11,3 @@ export function destinationForRole(role: Role): '/meeting' | '/agent-console' {
 export function isProxyRole(role: Role): boolean {
   return role === 'proxy'
 }
-
-export function isMeetingRole(role: Role): boolean {
-  return role === 'moderator' || role === 'active' || role === 'silent'
-}

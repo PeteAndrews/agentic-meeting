@@ -5,6 +5,7 @@ import { AudioPublisher } from "./audioPublisher.js";
 import { createBotApi } from "./botApi.js";
 import { config } from "./config.js";
 import { JitsiClient } from "./jitsiClient.js";
+import { preloadThinkingAmbient } from "./thinkingAmbient.js";
 import { installWebRtcAdapter } from "./webrtcAdapter.js";
 
 process.on("uncaughtException", (error) => {
@@ -25,9 +26,11 @@ if (!config.fakeJitsi) {
   }
 }
 
+preloadThinkingAmbient();
+
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "12mb" }));
 
 const jitsiClient = new JitsiClient();
 const audioPublisher = new AudioPublisher(jitsiClient);

@@ -133,10 +133,6 @@ def _word_matches_phrase(word: str, phrase: str, *, max_distance: int) -> bool:
     return _levenshtein(word, candidate) <= allowed
 
 
-def contains_trigger(text: str, phrases: list[str]) -> bool:
-    return match_trigger(text, phrases) is not None
-
-
 def match_trigger(text: str, phrases: list[str]) -> str | None:
     opener = _opener_words(text)
     if not opener:

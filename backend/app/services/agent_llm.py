@@ -4,14 +4,13 @@ import json
 import logging
 import os
 import re
-import urllib.error
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from app.domain.models import AgentProfile, AgentPrompt, AgentPromptStatus
 from app.services.agent_store import load_prompts
+from app.services.http_client import HttpClientError, post_json
 from app.services.scenario_loader import ScenarioDefinition, load_scenario, questions_for_calibration
 from app.storage.jsonl import data_dir
 
@@ -137,11 +136,21 @@ def format_proxy_console_message(
     reason: str | None = None,
 ) -> str:
     question = trigger_text.strip()
+    suggestion = (llm_text or "").strip()
+    if question and suggestion:
+        return (
+            f"Hi in the meeting I was asked, '{question}'. "
+            f"Suggested framing: {suggestion} "
+            "Give me an answer and I will communicate it in the meeting."
+        )
     if question:
         return (
             f"Hi in the meeting I was asked, '{question}', "
             "give me an answer and I will communicate it in the meeting."
         )
+    if suggestion:
+        detail = f" ({reason})" if reason else ""
+        return f"Hi, I need your answer so I can respond in the meeting{detail}: {suggestion}"
     return "Hi, I need your answer so I can respond in the meeting."
 
 
@@ -343,14 +352,6 @@ def parse_llm_json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def parse_llm_response(raw: str) -> dict[str, Any]:
-    parsed = parse_llm_json_object(raw)
-    action = parsed.get("action")
-    if action not in ("draft_public", "ask_proxy", "wait"):
-        raise AgentLlmError(f"Invalid action in LLM response: {action!r}")
-    return parsed
-
-
 def _chat_completion_json(
     *,
     system_prompt: str,
@@ -374,23 +375,17 @@ def _chat_completion_json(
     if temperature is not None and not chosen_model.startswith("gpt-5"):
         payload["temperature"] = temperature
     apply_completion_token_limit(payload, chosen_model)
-    req = urllib.request.Request(
-        url="https://api.openai.com/v1/chat/completions",
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(payload).encode("utf-8"),
-    )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") or str(exc)
-        raise AgentLlmError(f"OpenAI chat HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise AgentLlmError(f"OpenAI chat request failed: {exc.reason}") from exc
+        body = post_json(
+            "https://api.openai.com/v1/chat/completions",
+            payload,
+            timeout=120.0,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            raise AgentLlmError(f"OpenAI chat HTTP {exc.status_code}: {exc.body}") from exc
+        raise AgentLlmError(f"OpenAI chat request failed: {exc.reason or exc}") from exc
 
     try:
         content = body["choices"][0]["message"]["content"]

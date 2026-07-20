@@ -44,9 +44,3 @@ export function isAffirmative(text: string): boolean {
   if (NEGATIVE_PATTERNS.some((p) => p.test(normalized))) return false
   return AFFIRMATIVE_PATTERNS.some((p) => p.test(normalized))
 }
-
-export function isNegative(text: string): boolean {
-  const normalized = normalizeReply(text)
-  if (!normalized) return false
-  return NEGATIVE_PATTERNS.some((p) => p.test(normalized))
-}

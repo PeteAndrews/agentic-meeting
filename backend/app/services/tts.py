@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 from typing import Literal
 
 from app.domain.models import AgentProfile
+from app.services.http_client import HttpClientError, post_bytes
 
 VoiceMode = Literal["generic_tts", "cloned_voice_tts", "manual_test_audio"]
 TtsVoiceGender = Literal["male", "female"]
@@ -56,24 +54,17 @@ def synthesize_speech(
         "voice": voice,
         "response_format": "pcm",
     }
-    req = urllib.request.Request(
-        url="https://api.openai.com/v1/audio/speech",
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        data=json.dumps(payload).encode("utf-8"),
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            audio = resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") or str(exc)
-        raise TtsError(f"OpenAI TTS HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise TtsError(f"OpenAI TTS request failed: {exc.reason}") from exc
+        audio = post_bytes(
+            "https://api.openai.com/v1/audio/speech",
+            payload,
+            timeout=120.0,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            raise TtsError(f"OpenAI TTS HTTP {exc.status_code}: {exc.body}") from exc
+        raise TtsError(f"OpenAI TTS request failed: {exc.reason or exc}") from exc
 
     if not audio:
         raise TtsError("OpenAI TTS returned empty audio")

@@ -148,10 +148,74 @@ def _validate_ref_path(path: Path) -> Path:
     return resolved
 
 
+def _infer_nfe_step() -> int:
+    raw = os.environ.get("F5_TTS_NFE_STEP", "").strip()
+    if not raw:
+        return 32
+    try:
+        return max(4, min(64, int(raw)))
+    except ValueError:
+        return 32
+
+
+def _infer_speed() -> float:
+    raw = os.environ.get("F5_TTS_SPEED", "").strip()
+    if not raw:
+        return 1.0
+    try:
+        return max(0.5, min(2.0, float(raw)))
+    except ValueError:
+        return 1.0
+
+
+def _warmup_engine(engine: Any) -> None:
+    """Run a short dummy infer so the first real speak avoids CUDA cold start."""
+    try:
+        import tempfile
+        import wave
+
+        sr = int(getattr(engine, "target_sample_rate", 24_000) or 24_000)
+        # ~0.5s of quiet noise as a disposable reference clip.
+        samples = (np.random.randn(sr // 2).astype(np.float32) * 0.01)
+        pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            with wave.open(tmp_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+                wf.writeframes(pcm.tobytes())
+            nfe_step = _infer_nfe_step()
+            speed = _infer_speed()
+            print(f"[f5-tts-service] warm-up infer (nfe_step={nfe_step}, speed={speed})...")
+            with _engine_lock:
+                engine.infer(
+                    ref_file=tmp_path,
+                    ref_text="Warm up.",
+                    gen_text="Ready.",
+                    nfe_step=nfe_step,
+                    speed=speed,
+                    show_info=lambda *_args, **_kwargs: None,
+                    progress=None,
+                )
+            print("[f5-tts-service] warm-up complete")
+            logger.info("F5-TTS warm-up complete (nfe_step=%s, speed=%s)", nfe_step, speed)
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[f5-tts-service] warm-up skipped: {exc}")
+        logger.warning("F5-TTS warm-up skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global _engine
     _engine = _load_engine()
+    _warmup_engine(_engine)
     yield
     _engine = None
 
@@ -175,12 +239,16 @@ def synthesize(body: SynthesizeRequest) -> SynthesizeResponse:
         raise HTTPException(status_code=503, detail="F5-TTS model not loaded")
 
     ref_path = _validate_ref_path(Path(body.ref_audio_path))
+    nfe_step = _infer_nfe_step()
+    speed = _infer_speed()
     try:
         with _engine_lock:
             wav, sample_rate, _spec = _engine.infer(
                 ref_file=str(ref_path),
                 ref_text=body.ref_text,
                 gen_text=body.text,
+                nfe_step=nfe_step,
+                speed=speed,
                 show_info=lambda *_args, **_kwargs: None,
                 progress=None,
             )

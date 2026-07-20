@@ -5,25 +5,8 @@ import { AgentChatPanel } from '../components/AgentChatPanel'
 import { apiJson } from '../api/http'
 import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { clearSession, type VoiceOutputMode } from '../store/sessionSlice'
-
-type AgentProfile = {
-  roomName: string
-  participantId: string
-  voiceOutputMode: VoiceOutputMode
-  voiceSampleStored: boolean
-  scenario?: string | null
-  droppedQuestionIndex?: number | null
-  calibrationAnswers?: Record<string, string>
-  calibrationCompletedAt: string | null
-  interventionsUsed?: number
-  maxInterventions?: number
-  updatedAt: string | null
-}
-
-function voiceModeLabel(mode: VoiceOutputMode): string {
-  return mode === 'cloned_voice_tts' ? 'Clone sample' : 'OpenAI TTS'
-}
+import { clearSession } from '../store/sessionSlice'
+import { type AgentProfile, voiceModeLabel } from '../types/agent'
 
 export function AgentConsole() {
   const session = useAppSelector((s) => s.session.session)

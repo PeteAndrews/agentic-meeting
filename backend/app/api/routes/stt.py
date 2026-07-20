@@ -22,6 +22,8 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
 
 @router.websocket("/stt/stream")
 async def stt_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+
     if default_stt_mode() != "server_per_client":
         await websocket.close(code=1008, reason="Server STT is disabled (STT_MODE=browser)")
         return
@@ -44,8 +46,6 @@ async def stt_stream(websocket: WebSocket) -> None:
     except ValueError:
         await websocket.close(code=1008, reason="Invalid role or condition")
         return
-
-    await websocket.accept()
 
     session = DeepgramStreamSession(
         room_name=room_name,

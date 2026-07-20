@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Literal
 
 from app.domain.models import AgentProfile, AgentPrompt, AgentPromptStatus, Condition, LogEventRequest, Role
@@ -33,7 +34,7 @@ from app.storage.jsonl import data_dir
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_last_processed: dict[str, int] = {}
+_last_processed: dict[str, str] = {}
 _room_locks: dict[str, threading.Lock] = {}
 _room_locks_guard = threading.Lock()
 
@@ -56,7 +57,7 @@ def _persist_agent_event(room_name: str, event_type: str, payload: dict[str, Any
         participantId="echo",
         role=Role.AGENT,
         condition=Condition.HA,
-        tsMs=int(__import__("time").time() * 1000),
+        tsMs=int(time.time() * 1000),
         eventType=event_type,
         payload={"loggedAt": now_iso(), **payload},
     )
@@ -64,26 +65,23 @@ def _persist_agent_event(room_name: str, event_type: str, payload: dict[str, Any
 
 
 def _load_final_segments(room_name: str) -> list[dict[str, Any]]:
-    try:
-        rows = read_jsonl(_segments_path(room_name))
-    except FileNotFoundError:
-        return []
+    rows = read_jsonl(_segments_path(room_name))
     final = [r for r in rows if r.get("isFinal") is True]
     final.sort(key=lambda s: (int(s.get("startMs", 0)), int(s.get("endMs", 0))))
     return final
 
 
-def _segment_signature(segments: list[dict[str, Any]]) -> int:
+def _segment_signature(segments: list[dict[str, Any]]) -> str:
     if not segments:
-        return 0
+        return "0"
     last = segments[-1]
-    return hash(
-        (
-            len(segments),
-            last.get("participantId"),
-            last.get("text"),
-            last.get("endMs"),
-        )
+    return "|".join(
+        [
+            str(len(segments)),
+            str(last.get("participantId") or ""),
+            str(last.get("text") or ""),
+            str(last.get("endMs") or ""),
+        ]
     )
 
 
@@ -94,6 +92,16 @@ def _room_lock(room_name: str) -> threading.Lock:
             lock = threading.Lock()
             _room_locks[room_name] = lock
         return lock
+
+
+def _start_thinking_async(room_name: str) -> None:
+    """Fire ambient thinking without blocking the agent-loop LLM/TTS path."""
+    threading.Thread(
+        target=start_thinking,
+        args=(room_name,),
+        name=f"thinking-start-{safe_room_slug(room_name)}",
+        daemon=True,
+    ).start()
 
 
 def _already_processed(room_name: str, segments: list[dict[str, Any]]) -> bool:
@@ -230,7 +238,6 @@ def _submit_proxy_question(
         triggerSegmentText=trigger_text,
     )
     saved = save_prompt(room_name, prompt)
-    start_thinking(room_name)
     return saved
 
 
@@ -325,7 +332,7 @@ def _process_transcript_update(room_name: str) -> AgentPrompt | None:
         trigger_text,
         matched_phrase,
     )
-    start_thinking(room_name)
+    _start_thinking_async(room_name)
 
     result: AgentPrompt | None = None
     try:
@@ -587,13 +594,3 @@ def create_draft_from_proxy_reply(
         triggerSegmentText=trigger_segment_text,
     )
     return save_prompt(room_name, prompt)
-
-
-def dropped_question_ids(profile: AgentProfile) -> set[str]:
-    if not profile.scenario or profile.droppedQuestionIndex is None:
-        return set()
-    scenario = load_scenario(profile.scenario)
-    for i, question in enumerate(scenario.calibrationQuestions):
-        if i == profile.droppedQuestionIndex:
-            return {question.id}
-    return set()

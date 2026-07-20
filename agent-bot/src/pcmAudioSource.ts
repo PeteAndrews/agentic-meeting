@@ -216,9 +216,9 @@ export class PcmAudioSource {
     const end = Math.min(this.offset + this.frameSamples, this.pcm.length);
     const written = end - this.offset;
     samples.set(this.pcm.subarray(this.offset, end));
-    const lastSample = written > 0 ? samples[written - 1]! : 0;
+    // Pad partial final frame with silence (not last sample) to avoid a click/buzz.
     for (let i = written; i < this.frameSamples; i += 1) {
-      samples[i] = lastSample;
+      samples[i] = 0;
     }
     this.offset = end;
     this.source.onData({ samples, sampleRate: this.sampleRate });

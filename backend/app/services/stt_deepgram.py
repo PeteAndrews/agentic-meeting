@@ -141,22 +141,47 @@ class DeepgramStreamSession:
         return payload
 
     def handle_deepgram_message(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+        """Sync parse path used when no disk I/O is needed (interim/partial)."""
+        return self._parse_deepgram_message(message, persist=False)
+
+    async def handle_deepgram_message_async(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+        """Async path that offloads JSONL append off the event loop."""
+        out, segment = self._parse_deepgram_message_parts(message)
+        if segment is not None:
+            await asyncio.to_thread(append_transcript_segment, segment, source="server")
+        return out
+
+    def _parse_deepgram_message(
+        self,
+        message: dict[str, Any],
+        *,
+        persist: bool,
+    ) -> list[dict[str, Any]]:
+        out, segment = self._parse_deepgram_message_parts(message)
+        if persist and segment is not None:
+            append_transcript_segment(segment, source="server")
+        return out
+
+    def _parse_deepgram_message_parts(
+        self,
+        message: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], TranscriptSegmentRequest | None]:
         msg_type = message.get("type")
         if msg_type == "Metadata":
-            return [self._client_message(msg_type="ready")]
+            return [self._client_message(msg_type="ready")], None
 
         if msg_type != "Results":
-            return []
+            return [], None
 
         channel = message.get("channel") or {}
         alternatives = channel.get("alternatives") or []
         if not alternatives:
-            return []
+            return [], None
 
         alt = alternatives[0] or {}
         transcript = str(alt.get("transcript") or "").strip()
         if not transcript:
-            return []
+            return [], None
 
         confidence_raw = alt.get("confidence")
         confidence = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else None
@@ -168,11 +193,11 @@ class DeepgramStreamSession:
         if self._utterance_start_ms is None:
             self._utterance_start_ms = now_ms
 
-        out: list[dict[str, Any]] = []
-
         if not is_final and self.send_interim:
-            out.append(self._client_message(msg_type="partial", text=transcript, confidence=confidence))
-            return out
+            return (
+                [self._client_message(msg_type="partial", text=transcript, confidence=confidence)],
+                None,
+            )
 
         if is_final or speech_final:
             start_ms = self._utterance_start_ms
@@ -191,9 +216,7 @@ class DeepgramStreamSession:
                 confidence=confidence,
                 source="server",
             )
-            append_transcript_segment(segment, source="server")
-
-            out.append(
+            out = [
                 self._client_message(
                     msg_type="final",
                     text=transcript,
@@ -201,9 +224,10 @@ class DeepgramStreamSession:
                     end_ms=segment.endMs,
                     confidence=confidence,
                 )
-            )
+            ]
+            return out, segment
 
-        return out
+        return [], None
 
     async def forward_deepgram_events(self, client_send_json) -> None:
         """Read Deepgram messages until the upstream socket closes."""
@@ -211,5 +235,5 @@ class DeepgramStreamSession:
             message = await self.recv_event()
             if message is None:
                 break
-            for client_msg in self.handle_deepgram_message(message):
+            for client_msg in await self.handle_deepgram_message_async(message):
                 await client_send_json(client_msg)

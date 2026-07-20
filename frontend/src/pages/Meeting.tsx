@@ -45,8 +45,6 @@ export function Meeting() {
   const session = useAppSelector((s) => s.session.session)
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
-  const [eventStatus, setEventStatus] = useState<'idle' | 'error'>('idle')
-  const [configStatus, setConfigStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null)
   const [sttDesired, setSttDesired] = useState(false)
   const [sttRestartNonce, setSttRestartNonce] = useState(0)
@@ -106,18 +104,15 @@ export function Meeting() {
 
     let cancelled = false
     async function loadConfig() {
-      setConfigStatus('loading')
       try {
         const cfg = await apiJson<SessionConfig>(
           `/api/session-config?roomName=${encodeURIComponent(roomName)}`,
         )
         if (cancelled) return
         setSessionConfig(cfg)
-        setConfigStatus('idle')
       } catch {
         if (cancelled) return
         setSessionConfig(null)
-        setConfigStatus('error')
       }
     }
 
@@ -142,9 +137,8 @@ export function Meeting() {
           payload,
         } satisfies LogEventRequest),
       })
-      setEventStatus('idle')
     } catch {
-      setEventStatus('error')
+      // Event logging is best-effort; don't surface status in the study UI.
     }
   }
 
@@ -218,12 +212,14 @@ export function Meeting() {
     if (!RecCtor) return
 
     let stopped = false
+    let restartTimer: ReturnType<typeof setTimeout> | null = null
     const rec = new RecCtor()
     sttRecRef.current = rec
 
     rec.lang = sessionConfig.sttLanguage || 'en-US'
     rec.continuous = true
-    rec.interimResults = !!sessionConfig.sttSendInterim
+    // Interim results are never posted to the backend; keep them off.
+    rec.interimResults = false
     rec.maxAlternatives = 1
 
     rec.onresult = (ev) => {
@@ -276,7 +272,7 @@ export function Meeting() {
       if (stopped) return
       if (!sttDesiredRef.current) return
       // Chrome frequently ends recognition after pauses; recreate the instance.
-      setTimeout(() => {
+      restartTimer = setTimeout(() => {
         if (!sttDesiredRef.current) return
         setSttRestartNonce((n) => n + 1)
       }, 250)
@@ -294,6 +290,7 @@ export function Meeting() {
 
     return () => {
       stopped = true
+      if (restartTimer) clearTimeout(restartTimer)
       try {
         rec.onresult = null
         rec.onerror = null
@@ -393,15 +390,24 @@ export function Meeting() {
 
   return (
     <div className="page">
-      <header className="topbar">
-        <div className="brand">Agentic Meeting</div>
-        <div className="tag">
-          {session.displayName} · {session.condition} · room <code>{session.roomName}</code>
-        </div>
+      <header className="topbar topbarActionsOnly">
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {eventStatus === 'error' && <span className="pill warn">logging offline</span>}
-          {configStatus === 'loading' && <span className="pill">config loading…</span>}
-          {configStatus === 'error' && <span className="pill warn">config error</span>}
+          {sttRequireUserClick &&
+            !sttDesired &&
+            sttSupported &&
+            sttEnabledByConfig &&
+            sttAllowedByRole && (
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => {
+                  setSttDesired(true)
+                  void logEvent('stt.user_enabled', { reason: 'click' })
+                }}
+              >
+                Enable transcription
+              </button>
+            )}
           <button
             className="button secondary"
             onClick={() => {

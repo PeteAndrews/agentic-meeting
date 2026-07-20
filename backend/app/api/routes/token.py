@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -12,24 +14,54 @@ from app.storage.jsonl import append_jsonl, data_dir, now_iso
 
 router = APIRouter()
 
+_registry_cache: dict[str, dict[str, Any]] | None = None
+_registry_mtime: float | None = None
+_registry_size: int | None = None
+_registry_lock = threading.Lock()
+
 
 def _tokens_path() -> Path:
     return data_dir() / "token_registry.jsonl"
 
 
 def _load_token_registry() -> dict[str, dict[str, Any]]:
+    global _registry_cache, _registry_mtime, _registry_size
     path = _tokens_path()
     if not path.exists():
+        with _registry_lock:
+            _registry_cache = {}
+            _registry_mtime = None
+            _registry_size = None
         return {}
+
+    try:
+        stat = path.stat()
+        mtime = stat.st_mtime
+        size = stat.st_size
+    except OSError:
+        return {}
+
+    with _registry_lock:
+        if (
+            _registry_cache is not None
+            and _registry_mtime == mtime
+            and _registry_size == size
+        ):
+            return _registry_cache
 
     registry: dict[str, dict[str, Any]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        rec = __import__("json").loads(line)
+        rec = json.loads(line)
         token = rec.get("studyToken")
         if isinstance(token, str):
             registry[token] = rec
+
+    with _registry_lock:
+        _registry_cache = registry
+        _registry_mtime = mtime
+        _registry_size = size
     return registry
 
 
@@ -58,6 +90,11 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
             "displayName": "User C (moderator)",
         }
         append_jsonl(_tokens_path(), rec)
+        with _registry_lock:
+            global _registry_cache, _registry_mtime, _registry_size
+            _registry_cache = None
+            _registry_mtime = None
+            _registry_size = None
 
     try:
         role = Role(rec["role"])
@@ -115,4 +152,3 @@ def resolve_token(body: ResolveTokenRequest) -> ResolveTokenResponse:
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Invalid token registry record: {e}") from e
-

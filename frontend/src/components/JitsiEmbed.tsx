@@ -50,8 +50,6 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
     let observer: ResizeObserver | null = null
 
     async function start() {
-      console.log('Starting Jitsi meeting on domain:', JITSI_DOMAIN)
-
       await loadJitsiExternalApi()
       if (cancelled) return
       if (!hostRef.current) return

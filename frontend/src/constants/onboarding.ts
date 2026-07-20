@@ -1,5 +1,3 @@
-export const DEFAULT_AGENT_DISPLAY_NAME = 'Echo'
-
 export const ONBOARDING_GREETING =
   "Hi — I'm Echo. I'll attend this meeting on your behalf and keep you updated here in our chat."
 

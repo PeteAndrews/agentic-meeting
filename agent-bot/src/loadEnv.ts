@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-function agentBotRoot(): string {
+export function agentBotRoot(): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const parent = resolve(moduleDir, "..");
   if (parent.endsWith(`${sep}dist`) || parent.endsWith("/dist") || parent.endsWith("\\dist")) {

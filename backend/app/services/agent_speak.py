@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import base64
-import json
-import os
-import urllib.error
-import urllib.request
 
 from app.domain.models import AgentProfile, VoiceMode
+from app.services.http_client import HttpClientError, post_json_to_bot
 from app.services.tts import TtsError, pcm_duration_ms, synthesize_speech
 
 
@@ -14,27 +11,14 @@ class AgentSpeakError(Exception):
     pass
 
 
-def _agent_bot_base_url() -> str:
-    return os.environ.get("AGENT_BOT_BASE_URL", "http://127.0.0.1:3001").rstrip("/")
-
-
 def _post_json(path: str, payload: dict, timeout: float) -> dict:
-    url = f"{_agent_bot_base_url()}{path}"
-    req = urllib.request.Request(
-        url=url,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(payload).encode("utf-8"),
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content = resp.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8") or str(exc)
-        raise AgentSpeakError(f"Agent-bot HTTP error: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise AgentSpeakError(f"Agent-bot unavailable: {exc.reason}") from exc
+        return post_json_to_bot(path, payload, timeout=timeout)
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            detail = exc.body or str(exc)
+            raise AgentSpeakError(f"Agent-bot HTTP error: {detail}") from exc
+        raise AgentSpeakError(f"Agent-bot unavailable: {exc.reason or exc}") from exc
 
 
 def speak_in_room(

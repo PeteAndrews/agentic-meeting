@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import base64
 import binascii
-import json
 import os
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 
 from app.domain.models import AgentProfile
+from app.services.http_client import HttpClientError, post_json
 from app.services.scenario_loader import load_scenario
 from app.services.tts import TtsError
 from app.storage.jsonl import data_dir
@@ -72,34 +70,6 @@ def resolve_ref_text(profile: AgentProfile) -> str:
         except (FileNotFoundError, ValueError):
             pass
     return DEFAULT_VOICE_SAMPLE_PASSAGE.strip()
-
-
-def transcribe_voice_sample_ref_text(ref_wav_path: Path, *, language: str | None = None) -> str:
-    payload: dict[str, str] = {"ref_audio_path": str(ref_wav_path.resolve())}
-    if language:
-        payload["language"] = language
-    req = urllib.request.Request(
-        url=f"{f5_service_url()}/transcribe",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(payload).encode("utf-8"),
-    )
-    timeout = f5_request_timeout_sec()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") or str(exc)
-        raise TtsError(f"F5-TTS transcribe HTTP {exc.code}: {detail}") from exc
-    except TimeoutError as exc:
-        raise TtsError(f"F5-TTS transcribe timed out after {timeout:.0f}s") from exc
-    except urllib.error.URLError as exc:
-        raise TtsError(f"F5-TTS service unavailable at {f5_service_url()}: {exc.reason}") from exc
-
-    ref_text = (body.get("ref_text") or "").strip()
-    if not ref_text:
-        raise TtsError("F5-TTS transcribe returned empty ref_text")
-    return ref_text
 
 
 def ensure_profile_ref_text(profile: AgentProfile) -> AgentProfile:
@@ -187,23 +157,15 @@ def _post_f5_synthesize(
         "ref_audio_path": str(ref_wav_path.resolve()),
         "ref_text": ref_text,
     }
-    req = urllib.request.Request(
-        url=f"{f5_service_url()}/synthesize",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps(payload).encode("utf-8"),
-    )
     timeout = f5_request_timeout_sec()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") or str(exc)
-        raise TtsError(f"F5-TTS service HTTP {exc.code}: {detail}") from exc
-    except TimeoutError as exc:
-        raise TtsError(f"F5-TTS synthesize timed out after {timeout:.0f}s") from exc
-    except urllib.error.URLError as exc:
-        raise TtsError(f"F5-TTS service unavailable at {f5_service_url()}: {exc.reason}") from exc
+        body = post_json(f"{f5_service_url()}/synthesize", payload, timeout=timeout)
+    except HttpClientError as exc:
+        if exc.status_code is not None:
+            raise TtsError(f"F5-TTS service HTTP {exc.status_code}: {exc.body}") from exc
+        if "timed out" in str(exc).lower():
+            raise TtsError(f"F5-TTS synthesize timed out after {timeout:.0f}s") from exc
+        raise TtsError(f"F5-TTS service unavailable at {f5_service_url()}: {exc.reason or exc}") from exc
 
     pcm_b64 = body.get("pcm_base64")
     sample_rate = body.get("sample_rate")
