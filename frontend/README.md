@@ -1,5 +1,7 @@
 # Frontend (Vite + React)
 
+> Colleague onboarding (full stack + ngrok): see the [root README](../README.md).
+
 ## Run (Windows PowerShell)
 
 ```powershell
@@ -34,7 +36,7 @@ If you copied `backend/data/token_registry.example.jsonl` to `backend/data/token
 - `http://localhost:5173/?token=demo-ha-B` → Jitsi meeting (active)
 - `http://localhost:5173/?token=demo-ha-C-trip` → **Agent Console** (generic TTS, female voice, scenario `weekend_trip`, wake phrase `echo`)
 - `http://localhost:5173/?token=demo-ha-C-trip-male` → **Agent Console** (generic TTS, male voice, same scenario)
-- `http://localhost:5173/?token=demo-ha-C-trip-clone` → **Agent Console** (clone arm, same scenario; speak fails until Phase 5D)
+- `http://localhost:5173/?token=demo-ha-C-trip-clone` → **Agent Console** (clone arm; requires optional [f5-tts-service](../f5-tts-service/README.md) — see root [README](../README.md))
 
 Phase 6B/7: Person C sees a fixed **Echo** introduction, scenario calibration questions, records a voice sample only on the clone arm, then Echo joins the meeting automatically. Live prompts (approve / edit / reject) appear when A or B address Echo by name in the meeting.
 - `http://localhost:5173/?token=demo-ha-C-party` → birthday party scenario

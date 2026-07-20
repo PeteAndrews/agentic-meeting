@@ -7,29 +7,36 @@ The FastAPI backend calls this service; it does **not** replace generic OpenAI T
 ## Prerequisites
 
 - Python 3.10+ (3.11 recommended)
+- **Conda** (recommended) or a local `.venv`
 - NVIDIA GPU with CUDA (CPU works but is very slow)
 - [ffmpeg](https://ffmpeg.org/) on PATH (backend uses it to convert browser WebM samples to WAV)
 - ~4 GB disk for Hugging Face model weights (first run downloads automatically)
 
-## Setup (Windows PowerShell)
+## Setup (Windows PowerShell) — conda recommended
+
+```powershell
+conda create -n agentic-f5 python=3.11 -y
+conda activate agentic-f5
+
+# Install PyTorch with CUDA first — match your CUDA version from https://pytorch.org
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+cd f5-tts-service
+pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env → set F5_TTS_ALLOWED_AUDIO_ROOTS to your absolute voice_samples path
+```
+
+### Fallback: local venv
 
 ```powershell
 cd f5-tts-service
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-
-# Install PyTorch with CUDA first — match your CUDA version from https://pytorch.org
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
-
 pip install -r requirements.txt
-```
-
-Set allowed voice-sample roots in `.env` (copy from `.env.example`):
-
-```powershell
 Copy-Item .env.example .env
-# Edit .env if your repo path differs
 ```
 
 ## Run
@@ -39,16 +46,12 @@ cd f5-tts-service
 .\start.ps1
 ```
 
-`start.ps1` loads `f5-tts-service/.env` (including `F5_TTS_ALLOWED_AUDIO_ROOTS`) and starts uvicorn. No need to set `$env:...` manually each time.
+`start.ps1` prefers conda env `agentic-f5` (override with `$env:F5_CONDA_ENV`), then falls back to `.venv`.
 
-Manual start (without the script):
+Or from the repo root (with the rest of the stack):
 
 ```powershell
-cd f5-tts-service
-.\.venv\Scripts\Activate.ps1
-$env:HF_HUB_DISABLE_XET="1"
-$env:F5_TTS_ALLOWED_AUDIO_ROOTS="D:\Projects\Agentic-Meeting\backend\data\voice_samples"
-python -m uvicorn main:app --host 127.0.0.1 --port 8765
+.\start-all.ps1 -WithF5
 ```
 
 First startup downloads model weights and may take several minutes.
@@ -89,8 +92,11 @@ Response:
 | `F5_TTS_MODEL` | `F5TTS_v1_Base` | F5-TTS model name |
 | `F5_TTS_DEVICE` | auto | `cuda`, `cpu`, etc. |
 | `F5_TTS_ALLOWED_AUDIO_ROOTS` | (none) | `;`-separated paths; ref audio must live under one |
+| `F5_CONDA_ENV` | `agentic-f5` | Conda env name used by `start.ps1` |
 | `HF_HUB_DISABLE_XET` | `1` in `.env` / `start.ps1` | Avoid `hf_xet` crash on some Windows hosts during model download |
 | `HF_TOKEN` | (none) | Optional Hugging Face token for faster downloads |
+| `F5_TTS_NFE_STEP` | `32` | Diffusion steps (lower ≈ faster, modest quality cost) |
+| `F5_TTS_SPEED` | `1.0` | Speech speed multiplier |
 
 ## Study session startup order
 

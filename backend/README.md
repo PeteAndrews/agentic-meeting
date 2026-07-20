@@ -1,8 +1,10 @@
 # Backend (FastAPI)
 
+> Colleague onboarding (full stack + ngrok): see the [root README](../README.md).
+
 ## Run (Windows PowerShell)
 
-Create a venv, install deps, and start the API:
+Create a **venv**, install deps, and start the API:
 
 ```powershell
 cd backend
@@ -185,8 +187,9 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/agent/speak `
 
 ## Study flow (HA demo)
 
-1. Start backend, **f5-tts-service** (clone arm only), agent-bot, and frontend.
-2. Person A joins Jitsi with `demo-ha-A` (moderator should be in the room first).
+1. Prefer the root scripts: `.\start-all.ps1` (add `-WithF5` only for clone arm). See the [root README](../README.md).
+2. Or start manually: backend, **f5-tts-service** (clone arm only), agent-bot, and frontend.
+3. Person A joins Jitsi with `demo-ha-A` (moderator should be in the room first).
 3. Person B joins with `demo-ha-B`.
 4. Person C opens Agent Console with `demo-ha-C-trip` or `demo-ha-C-trip-clone`.
 5. C completes onboarding; Echo joins automatically when onboarding finishes.

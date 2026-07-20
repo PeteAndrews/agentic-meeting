@@ -1,5 +1,7 @@
 # Agent Bot (Phase 5A–5C)
 
+> Colleague onboarding (full stack + ngrok): see the [root README](../README.md).
+
 Programmable HA participant service that joins Jitsi rooms as **Echo**.
 
 ## Prerequisites
