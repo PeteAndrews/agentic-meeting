@@ -1,3 +1,5 @@
+import "./loadEnv.js";
+
 const jitsiDomain = process.env.JITSI_DOMAIN ?? "meet.uib-study.com";
 
 export const config = {
@@ -32,4 +34,9 @@ export const config = {
   forceJvbAccept: process.env.AGENT_BOT_FORCE_JVB_ACCEPT !== "false",
   speakTestDurationMs: Number(process.env.AGENT_BOT_SPEAK_TEST_MS ?? 5000),
   speakTestFrequencyHz: Number(process.env.AGENT_BOT_SPEAK_TEST_HZ ?? 440),
+  /** MP3/WAV loop played while Echo is thinking or waiting for a proxy reply. */
+  waitingAudioPath: process.env.AGENT_BOT_WAITING_AUDIO ?? "",
+  /** Linear gain applied to the waiting audio loop (default 0.35). */
+  waitingAudioGain: Number(process.env.AGENT_BOT_WAITING_AUDIO_GAIN ?? 0.35),
+  ffmpegPath: process.env.FFMPEG_PATH?.trim() || "ffmpeg",
 };

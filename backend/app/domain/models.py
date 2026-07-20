@@ -46,6 +46,7 @@ class SessionConfig(BaseModel):
     condition: Condition
     agenda: list[str] = []
     sttEnabled: bool = True
+    sttMode: Literal["browser", "server_per_client"] = "browser"
     sttRoles: list[Role] = [Role.MODERATOR, Role.ACTIVE]
     sttLanguage: str = Field(default="en-US", min_length=2, max_length=32)
     sttSendInterim: bool = False
@@ -82,6 +83,7 @@ class TranscriptSegmentRequest(BaseModel):
     isFinal: bool = True
     text: str = Field(min_length=1, max_length=5000)
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source: Optional[Literal["browser", "server"]] = None
 
 
 class AgentJoinRequest(BaseModel):
@@ -120,6 +122,7 @@ class AgentProfile(BaseModel):
     voiceOutputMode: VoiceMode = "generic_tts"
     voiceSampleStored: bool = False
     voiceSamplePath: Optional[str] = None
+    voiceSampleRefText: Optional[str] = None
     scenario: Optional[str] = None
     droppedQuestionIndex: Optional[int] = Field(default=None, ge=0, le=20)
     calibrationAnswers: dict[str, str] = {}

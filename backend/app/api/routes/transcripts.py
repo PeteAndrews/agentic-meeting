@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from app.domain.models import TranscriptSegmentRequest
-from app.services.agent_loop import process_transcript_update
-from app.storage.jsonl import append_jsonl, data_dir, now_iso, read_jsonl, safe_room_slug
+from app.services.transcript_store import append_transcript_segment, segments_path
+from app.storage.jsonl import read_jsonl
 
 router = APIRouter()
-
-
-def _segments_path(room_name: str) -> Path:
-    return data_dir() / "transcripts" / f"{safe_room_slug(room_name)}.segments.jsonl"
 
 
 def _as_int(value: Any, field: str) -> int:
@@ -43,7 +38,7 @@ def _as_bool(value: Any, field: str, default: bool) -> bool:
 
 def _load_segments(room_name: str) -> list[dict[str, Any]]:
     try:
-        return read_jsonl(_segments_path(room_name))
+        return read_jsonl(segments_path(room_name))
     except FileNotFoundError:
         return []
     except Exception as e:  # noqa: BLE001
@@ -94,15 +89,7 @@ def _reconstruct_timeline(
 
 @router.post("/transcripts")
 def log_transcript_segment(body: TranscriptSegmentRequest) -> dict[str, str]:
-    append_jsonl(
-        _segments_path(body.roomName),
-        {
-            "loggedAt": now_iso(),
-            **body.model_dump(),
-        },
-    )
-    if body.isFinal and body.condition.value == "HA":
-        process_transcript_update(body.roomName)
+    append_transcript_segment(body, source=body.source or "browser")
     return {"status": "ok"}
 
 

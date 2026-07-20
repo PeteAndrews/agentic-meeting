@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ from app.services.agent_trigger import match_trigger, resolve_trigger_phrases
 from app.services.scenario_loader import load_scenario
 from app.storage.jsonl import now_iso, read_jsonl, safe_room_slug
 from app.storage.jsonl import data_dir
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _last_processed: dict[str, int] = {}
@@ -226,7 +229,9 @@ def _submit_proxy_question(
         updatedAt=now,
         triggerSegmentText=trigger_text,
     )
-    return save_prompt(room_name, prompt)
+    saved = save_prompt(room_name, prompt)
+    start_thinking(room_name)
+    return saved
 
 
 def process_transcript_update(room_name: str) -> AgentPrompt | None:
@@ -236,23 +241,62 @@ def process_transcript_update(room_name: str) -> AgentPrompt | None:
 
 def _process_transcript_update(room_name: str) -> AgentPrompt | None:
     profile = find_proxy_profile_for_room(room_name)
-    if not profile or not profile.calibrationCompletedAt or not profile.scenario:
+    if not profile:
+        logger.info(
+            "Echo skipped transcript for %s: no completed proxy profile is available",
+            room_name,
+        )
+        _persist_agent_event(room_name, "agent.loop_skipped", {"reason": "no_completed_proxy_profile"})
+        return None
+    if not profile.scenario:
+        logger.info(
+            "Echo skipped transcript for %s: profile %s has no scenario",
+            room_name,
+            profile.participantId,
+        )
+        _persist_agent_event(
+            room_name,
+            "agent.loop_skipped",
+            {"reason": "profile_missing_scenario", "participantId": profile.participantId},
+        )
+        return None
+    if not profile.calibrationCompletedAt:
+        logger.info(
+            "Echo skipped transcript for %s: profile %s has not completed onboarding",
+            room_name,
+            profile.participantId,
+        )
+        _persist_agent_event(
+            room_name,
+            "agent.loop_skipped",
+            {"reason": "onboarding_incomplete", "participantId": profile.participantId},
+        )
         return None
     if has_open_prompt(room_name):
+        logger.info("Echo skipped transcript for %s: a proxy prompt is already open", room_name)
+        _persist_agent_event(room_name, "agent.loop_skipped", {"reason": "prompt_already_open"})
         return None
 
     segments = _load_final_segments(room_name)
     if _already_processed(room_name, segments):
+        logger.debug("Echo skipped transcript for %s: segment already processed", room_name)
         return None
 
     last_seg = segments[-1]
     trigger_text = str(last_seg.get("text") or "").strip()
     if not trigger_text:
+        logger.info("Echo skipped transcript for %s: final segment is empty", room_name)
         return None
 
     phrases = resolve_trigger_phrases(profile)
     matched_phrase = match_trigger(trigger_text, phrases)
     if not matched_phrase:
+        logger.info(
+            "Echo trigger missed in %s: %r (expected one of %s)",
+            room_name,
+            trigger_text,
+            phrases,
+        )
         _persist_agent_event(
             room_name,
             "agent.trigger_missed",
@@ -275,18 +319,32 @@ def _process_transcript_update(room_name: str) -> AgentPrompt | None:
             "participantId": last_seg.get("participantId"),
         },
     )
+    logger.info(
+        "Echo trigger detected in %s: %r matched %r",
+        room_name,
+        trigger_text,
+        matched_phrase,
+    )
     start_thinking(room_name)
 
+    result: AgentPrompt | None = None
     try:
-        return _handle_triggered_turn(
+        result = _handle_triggered_turn(
             room_name,
             profile,
             segments=segments,
             trigger_text=trigger_text,
             matched_phrase=matched_phrase,
         )
+        return result
     finally:
-        stop_thinking(room_name)
+        waiting_for_proxy = (
+            result is not None
+            and result.kind == "proxy_question"
+            and result.status == AgentPromptStatus.PENDING_PROXY
+        )
+        if not waiting_for_proxy:
+            stop_thinking(room_name)
 
 
 def _handle_triggered_turn(

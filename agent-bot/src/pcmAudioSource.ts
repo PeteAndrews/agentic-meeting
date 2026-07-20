@@ -1,6 +1,12 @@
 import wrtc from "@roamhq/wrtc";
 
-import { generateThinkingAmbientFrame } from "./thinkingAmbient.js";
+import {
+  generateThinkingAmbientFrame,
+  loadThinkingAmbientPcm,
+  readThinkingAmbientFrameAt,
+  scaleThinkingAmbientPcm,
+} from "./thinkingAmbient.js";
+import { config } from "./config.js";
 import { patchTrackForLibJitsi } from "./webrtcAdapter.js";
 
 const { RTCAudioSource } = wrtc.nonstandard;
@@ -53,8 +59,11 @@ export class PcmAudioSource {
   private playResolve: (() => void) | null = null;
   private playStartMs = 0;
   private tailFramesRemaining = 0;
-  private ambientTimer: ReturnType<typeof setInterval> | null = null;
+  private ambientTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
+  private ambientScaledPcm: Int16Array | null = null;
+  private ambientStartMs = 0;
+  private ambientEmittedSamples = 0;
 
   public ensureTrack(): MediaStreamTrack {
     if (this.track && this.track.readyState !== "ended") {
@@ -79,18 +88,64 @@ export class PcmAudioSource {
     this.sampleRate = TARGET_SAMPLE_RATE;
     this.frameSamples = Math.max(1, Math.floor(this.sampleRate / (1000 / FRAME_MS)));
     this.ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
-    this.ambientTimer = setInterval(() => {
-      const samples = generateThinkingAmbientFrame(this.frameSamples, this.ambientPhase);
-      this.source.onData({ samples, sampleRate: this.sampleRate });
-    }, FRAME_MS);
+    const gain = Number.isFinite(config.waitingAudioGain) ? config.waitingAudioGain : 0.35;
+    const rawPcm = loadThinkingAmbientPcm();
+    this.ambientScaledPcm = rawPcm ? scaleThinkingAmbientPcm(rawPcm, gain) : null;
+    this.ambientStartMs = performance.now();
+    this.ambientEmittedSamples = 0;
+    this.scheduleAmbientTick();
   }
 
   public stopThinkingAmbient(): void {
     if (this.ambientTimer) {
-      clearInterval(this.ambientTimer);
+      clearTimeout(this.ambientTimer);
       this.ambientTimer = null;
     }
     this.ambientPhase = { a: 0, b: 0, sampleIndex: 0 };
+    this.ambientScaledPcm = null;
+    this.ambientStartMs = 0;
+    this.ambientEmittedSamples = 0;
+  }
+
+  private ambientTargetSamples(): number {
+    if (this.ambientStartMs <= 0) {
+      return 0;
+    }
+    const elapsedSec = (performance.now() - this.ambientStartMs) / 1000;
+    return Math.floor(elapsedSec * this.sampleRate);
+  }
+
+  private emitAmbientFrame(): void {
+    let samples: Int16Array;
+    if (this.ambientScaledPcm != null) {
+      samples = readThinkingAmbientFrameAt(
+        this.frameSamples,
+        this.ambientEmittedSamples,
+        this.ambientScaledPcm,
+      );
+    } else {
+      this.ambientPhase.a = this.ambientEmittedSamples;
+      this.ambientPhase.b = this.ambientEmittedSamples;
+      this.ambientPhase.sampleIndex = this.ambientEmittedSamples;
+      samples = generateThinkingAmbientFrame(this.frameSamples, this.ambientPhase);
+    }
+    this.ambientEmittedSamples += this.frameSamples;
+    this.source.onData({ samples, sampleRate: this.sampleRate });
+  }
+
+  private drainAmbientToTarget(): void {
+    const target = this.ambientTargetSamples();
+    while (this.ambientEmittedSamples < target) {
+      this.emitAmbientFrame();
+    }
+  }
+
+  private scheduleAmbientTick(): void {
+    this.drainAmbientToTarget();
+    if (this.ambientStartMs <= 0) {
+      return;
+    }
+    this.ambientTimer = setTimeout(() => this.scheduleAmbientTick(), TICK_MS);
   }
 
   /** Feed PCM until exhausted; resolves after tail silence is paced out. */

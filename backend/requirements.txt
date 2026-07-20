@@ -4,3 +4,4 @@ uvicorn[standard]==0.39.0
 pydantic==2.12.5
 python-dotenv==1.2.1
 numpy>=1.26.0
+websockets>=14.0

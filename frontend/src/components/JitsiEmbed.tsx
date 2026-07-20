@@ -47,6 +47,7 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
 
   useEffect(() => {
     let cancelled = false
+    let observer: ResizeObserver | null = null
 
     async function start() {
       console.log('Starting Jitsi meeting on domain:', JITSI_DOMAIN)
@@ -63,6 +64,8 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
       const api = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
         roomName,
         parentNode: hostRef.current,
+        width: '100%',
+        height: '100%',
         userInfo: { displayName },
         configOverwrite: {
           startWithAudioMuted,
@@ -70,6 +73,25 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
       })
 
       apiRef.current = api
+
+      const resizeToHost = () => {
+        const host = hostRef.current
+        if (!host) return
+        const { width, height } = host.getBoundingClientRect()
+        if (width > 0 && height > 0) {
+          api.resize?.(width, height)
+        }
+      }
+
+      resizeToHost()
+
+      observer =
+        typeof ResizeObserver !== 'undefined'
+          ? new ResizeObserver(() => {
+              resizeToHost()
+            })
+          : null
+      observer?.observe(hostRef.current)
 
       const events = [
         'videoConferenceJoined',
@@ -91,6 +113,7 @@ export function JitsiEmbed({ roomName, displayName, startWithAudioMuted, onJitsi
 
     return () => {
       cancelled = true
+      observer?.disconnect()
       apiRef.current?.dispose()
       apiRef.current = null
     }

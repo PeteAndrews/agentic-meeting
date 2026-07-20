@@ -26,7 +26,7 @@ from app.services.agent_store import (
     update_prompt,
 )
 from app.services.agent_loop import create_draft_from_proxy_reply
-from app.services.agent_speak import AgentSpeakError, speak_for_profile, speak_in_room
+from app.services.agent_speak import AgentSpeakError, speak_for_profile, speak_in_room, start_thinking, stop_thinking
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
@@ -120,15 +120,23 @@ def respond_to_prompt(prompt_id: str, body: AgentPromptRespondRequest, roomName:
     if not profile:
         raise HTTPException(status_code=404, detail="Agent profile not found")
 
-    draft = create_draft_from_proxy_reply(
-        roomName,
-        profile,
-        proxy_reply=body.text,
-        source=prompt.source,
-        trigger_segment_text=prompt.triggerSegmentText,
-        status=AgentPromptStatus.APPROVED,
-    )
-    _speak_approved_text(roomName, draft.text, profile)
+    draft = None
+    start_thinking(roomName)
+    try:
+        draft = create_draft_from_proxy_reply(
+            roomName,
+            profile,
+            proxy_reply=body.text,
+            source=prompt.source,
+            trigger_segment_text=prompt.triggerSegmentText,
+            status=AgentPromptStatus.APPROVED,
+        )
+        _speak_approved_text(roomName, draft.text, profile)
+    finally:
+        stop_thinking(roomName)
+
+    if draft is None:
+        raise HTTPException(status_code=500, detail="Failed to create draft from proxy reply")
 
     updated = update_prompt(
         roomName,

@@ -61,6 +61,9 @@ def resolve_voice_sample_path(profile: AgentProfile) -> Path:
 
 
 def resolve_ref_text(profile: AgentProfile) -> str:
+    stored = (profile.voiceSampleRefText or "").strip()
+    if stored:
+        return stored
     if profile.scenario:
         try:
             scenario = load_scenario(profile.scenario)
@@ -71,13 +74,64 @@ def resolve_ref_text(profile: AgentProfile) -> str:
     return DEFAULT_VOICE_SAMPLE_PASSAGE.strip()
 
 
+def transcribe_voice_sample_ref_text(ref_wav_path: Path, *, language: str | None = None) -> str:
+    payload: dict[str, str] = {"ref_audio_path": str(ref_wav_path.resolve())}
+    if language:
+        payload["language"] = language
+    req = urllib.request.Request(
+        url=f"{f5_service_url()}/transcribe",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(payload).encode("utf-8"),
+    )
+    timeout = f5_request_timeout_sec()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") or str(exc)
+        raise TtsError(f"F5-TTS transcribe HTTP {exc.code}: {detail}") from exc
+    except TimeoutError as exc:
+        raise TtsError(f"F5-TTS transcribe timed out after {timeout:.0f}s") from exc
+    except urllib.error.URLError as exc:
+        raise TtsError(f"F5-TTS service unavailable at {f5_service_url()}: {exc.reason}") from exc
+
+    ref_text = (body.get("ref_text") or "").strip()
+    if not ref_text:
+        raise TtsError("F5-TTS transcribe returned empty ref_text")
+    return ref_text
+
+
+def ensure_profile_ref_text(profile: AgentProfile) -> AgentProfile:
+    """Ensure a ref transcript exists without calling F5 ASR.
+
+    F5's ``/transcribe`` lazy-loads Whisper (large HF download) and contends with
+    ``/synthesize`` on the same process — never invoke it on the speak path.
+    """
+    if (profile.voiceSampleRefText or "").strip():
+        return profile
+
+    from app.services.agent_store import save_profile
+    from app.storage.jsonl import now_iso
+
+    ref_text = resolve_ref_text(profile)
+    updated = profile.model_copy(
+        update={"voiceSampleRefText": ref_text, "updatedAt": now_iso()},
+    )
+    return save_profile(updated)
+
+
 def wav_cache_path(sample_path: Path) -> Path:
     return sample_path.with_suffix(".wav")
 
 
-def ensure_ref_wav(sample_path: Path) -> Path:
+def ensure_ref_wav(sample_path: Path, *, force_rebuild: bool = False) -> Path:
     cached = wav_cache_path(sample_path)
-    if cached.exists() and cached.stat().st_mtime >= sample_path.stat().st_mtime:
+    if (
+        not force_rebuild
+        and cached.exists()
+        and cached.stat().st_mtime >= sample_path.stat().st_mtime
+    ):
         return cached
 
     if sample_path.suffix.lower() == ".wav":
@@ -146,6 +200,8 @@ def _post_f5_synthesize(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") or str(exc)
         raise TtsError(f"F5-TTS service HTTP {exc.code}: {detail}") from exc
+    except TimeoutError as exc:
+        raise TtsError(f"F5-TTS synthesize timed out after {timeout:.0f}s") from exc
     except urllib.error.URLError as exc:
         raise TtsError(f"F5-TTS service unavailable at {f5_service_url()}: {exc.reason}") from exc
 
@@ -166,6 +222,7 @@ def synthesize_f5_clone(text: str, *, profile: AgentProfile) -> tuple[bytes, int
     if profile.voiceOutputMode != "cloned_voice_tts":
         raise TtsError("synthesize_f5_clone requires cloned_voice_tts profile")
 
+    profile = ensure_profile_ref_text(profile)
     sample_path = resolve_voice_sample_path(profile)
     ref_wav = ensure_ref_wav(sample_path)
     ref_text = resolve_ref_text(profile)

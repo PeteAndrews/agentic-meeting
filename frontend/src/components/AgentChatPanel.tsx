@@ -737,20 +737,24 @@ export function AgentChatPanel({ session, initialProfile, onProfileChange }: Pro
   async function respondToPrompt(promptId: string) {
     const text = draft.trim()
     if (!text) return
+
+    pushUser(text)
+    setDraft('')
     setBusy(true)
     setSaveError(null)
+    setTypingIndicator(randomTypingLabel(agentName))
+
     try {
       const query = new URLSearchParams({ roomName: session.roomName })
       await apiJson(`/api/agent/prompts/${promptId}/respond?${query.toString()}`, {
         method: 'POST',
         body: JSON.stringify({ text }),
       })
-      pushUser(text)
-      setDraft('')
       await loadPrompts()
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Failed to send response')
     } finally {
+      setTypingIndicator(null)
       setBusy(false)
     }
   }

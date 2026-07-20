@@ -26,6 +26,8 @@ from app.services.agent_join import join_agent_room
 from app.services.agent_llm import calibration_complete
 from app.services.agent_store import load_profile, save_profile
 from app.services.scenario_loader import load_scenario, questions_for_calibration
+from app.services.tts import TtsError
+from app.services.tts_f5 import ensure_ref_wav, resolve_ref_text
 from app.storage.jsonl import append_jsonl, data_dir, now_iso, safe_room_slug
 
 router = APIRouter()
@@ -281,15 +283,29 @@ def upload_voice_sample(body: AgentProfileVoiceSampleRequest) -> AgentProfile:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(audio)
 
+    # Always rebuild the WAV cache for an uploaded sample. Browser recordings
+    # can overwrite the WebM within the same timestamp resolution as its cache;
+    # relying on mtime would then leave F5 using stale, shorter audio.
+    try:
+        ensure_ref_wav(path, force_rebuild=True)
+    except TtsError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not process voice sample: {exc}",
+        ) from exc
+
     mode = _normalize_voice_mode(body.voiceOutputMode)
     profile = load_profile(body.roomName, body.participantId) or _default_profile(
         body.roomName, body.participantId, mode
     )
+    # Use the scripted passage the participant was asked to read (matches typical recording).
+    ref_text = resolve_ref_text(profile.model_copy(update={"voiceSampleRefText": None}))
     profile = profile.model_copy(
         update={
             "voiceOutputMode": mode if body.voiceOutputMode else profile.voiceOutputMode,
             "voiceSampleStored": True,
             "voiceSamplePath": path.name,
+            "voiceSampleRefText": ref_text,
             "updatedAt": now_iso(),
         }
     )
@@ -298,7 +314,13 @@ def upload_voice_sample(body: AgentProfileVoiceSampleRequest) -> AgentProfile:
         body.roomName,
         body.participantId,
         "proxy.voice_sample_uploaded",
-        {"bytes": len(audio), "mimeType": body.mimeType, "path": path.name},
+        {
+            "bytes": len(audio),
+            "mimeType": body.mimeType,
+            "path": path.name,
+            "refTextChars": len(ref_text),
+            "refTextSource": "passage",
+        },
     )
     return saved
 

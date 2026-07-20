@@ -4,6 +4,7 @@ declare global {
   interface JitsiMeetExternalAPI {
     addEventListener(name: string, handler: (payload: unknown) => void): void
     dispose(): void
+    resize?: (width: number | string, height: number | string) => void
   }
 
   interface Window {
@@ -12,6 +13,8 @@ declare global {
       options: {
         roomName: string
         parentNode: HTMLElement
+        width?: number | string
+        height?: number | string
         userInfo?: { displayName?: string }
         configOverwrite?: Record<string, unknown>
         interfaceConfigOverwrite?: Record<string, unknown>

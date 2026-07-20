@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 
 import { apiJson } from '../api/http'
-import { HighlightedText } from '../components/HighlightedText'
 import { JitsiEmbed } from '../components/JitsiEmbed'
+import { isServerSttSupported, startServerStt } from '../hooks/useServerStt'
 import { destinationForRole, isProxyRole } from '../routing/roleRoutes'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { clearSession } from '../store/sessionSlice'
@@ -34,6 +34,7 @@ type SessionConfig = {
   roomName: string
   condition: 'HH' | 'HA'
   sttEnabled: boolean
+  sttMode: 'browser' | 'server_per_client'
   sttRoles: Array<'moderator' | 'active' | 'silent' | 'proxy' | 'agent'>
   sttLanguage: string
   sttSendInterim: boolean
@@ -45,19 +46,23 @@ export function Meeting() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
   const [eventStatus, setEventStatus] = useState<'idle' | 'error'>('idle')
-  const [sttPostStatus, setSttPostStatus] = useState<'idle' | 'error'>('idle')
-  const [sttRunState, setSttRunState] = useState<'off' | 'starting' | 'listening'>('off')
-  const [sttLastError, setSttLastError] = useState<string | null>(null)
   const [configStatus, setConfigStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sessionConfig, setSessionConfig] = useState<SessionConfig | null>(null)
   const [sttDesired, setSttDesired] = useState(false)
   const [sttRestartNonce, setSttRestartNonce] = useState(0)
-  const [liveCaptions, setLiveCaptions] = useState<Array<{ id: string; text: string }>>([])
 
   const startWithAudioMuted = useMemo(() => session?.role === 'silent', [session?.role])
-  const sttSupported = useMemo(
+  const sttMode = useMemo(
+    () => sessionConfig?.sttMode ?? 'browser',
+    [sessionConfig?.sttMode],
+  )
+  const browserSttSupported = useMemo(
     () => typeof window !== 'undefined' && (!!window.SpeechRecognition || !!window.webkitSpeechRecognition),
     [],
+  )
+  const sttSupported = useMemo(
+    () => (sttMode === 'server_per_client' ? isServerSttSupported() : browserSttSupported),
+    [sttMode, browserSttSupported],
   )
   const sttAllowedByRole = useMemo(() => {
     if (!session || !sessionConfig) return false
@@ -73,6 +78,7 @@ export function Meeting() {
   }, [sessionConfig])
 
   const sttRecRef = useRef<SpeechRecognition | null>(null)
+  const serverSttStopRef = useRef<(() => void) | null>(null)
   const currentUtteranceStartMsRef = useRef<number | null>(null)
   const autoStartAttemptedRef = useRef(false)
   const sttDesiredRef = useRef(false)
@@ -86,6 +92,13 @@ export function Meeting() {
     void logEvent('ui.meeting_page_loaded', {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.participantId])
+
+  useEffect(() => {
+    document.documentElement.classList.add('meeting-layout')
+    return () => {
+      document.documentElement.classList.remove('meeting-layout')
+    }
+  }, [])
 
   useEffect(() => {
     if (!session) return
@@ -141,9 +154,8 @@ export function Meeting() {
         method: 'POST',
         body: JSON.stringify(body satisfies TranscriptSegmentRequest),
       })
-      setSttPostStatus('idle')
     } catch {
-      setSttPostStatus('error')
+      void logEvent('stt.post_failed', { roomName: body.roomName })
     }
   }
 
@@ -163,10 +175,12 @@ export function Meeting() {
         // ignore
       }
       sttRecRef.current = null
-      setSttRunState('off')
+      serverSttStopRef.current?.()
+      serverSttStopRef.current = null
       void logEvent('stt.disabled_by_policy', {
         sttEnabled: sttEnabledByConfig,
         roleAllowed: sttAllowedByRole,
+        sttMode,
       })
       return
     }
@@ -178,7 +192,6 @@ export function Meeting() {
       !autoStartAttemptedRef.current
     ) {
       autoStartAttemptedRef.current = true
-      setSttRunState('starting')
       setSttDesired(true)
       void logEvent('stt.auto_enabled', { reason: 'config' })
     }
@@ -190,10 +203,12 @@ export function Meeting() {
     sttEnabledByConfig,
     sttRequireUserClick,
     sttDesired,
+    sttMode,
   ])
 
   useEffect(() => {
     if (!session) return
+    if (sttMode !== 'browser') return
 
     if (!sttDesired) return
     if (!sessionConfig) return
@@ -231,11 +246,6 @@ export function Meeting() {
           const startMs = currentUtteranceStartMsRef.current ?? nowMs
           currentUtteranceStartMsRef.current = null
 
-          setLiveCaptions((prev) => {
-            const next = [...prev, { id: `${startMs}-${nowMs}-${prev.length}`, text }]
-            return next.slice(-8)
-          })
-
           void postTranscriptSegment({
             roomName: session.roomName,
             participantId: session.participantId,
@@ -256,7 +266,6 @@ export function Meeting() {
       // Browser STT emits no-speech / network during silence; harmless while listening.
       const benign = msg === 'no-speech' || msg === 'network' || msg === 'aborted'
       if (!benign) {
-        setSttLastError(msg)
         void logEvent('stt.error', { error: msg })
       }
     }
@@ -269,22 +278,16 @@ export function Meeting() {
       // Chrome frequently ends recognition after pauses; recreate the instance.
       setTimeout(() => {
         if (!sttDesiredRef.current) return
-        setSttRunState('starting')
         setSttRestartNonce((n) => n + 1)
       }, 250)
     }
 
     try {
-      setSttLastError(null)
-      setSttRunState('starting')
       void logEvent('stt.start_requested', {})
       rec.start()
-      setSttRunState('listening')
       void logEvent('stt.started', {})
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to start STT'
-      setSttLastError(msg)
-      setSttRunState('off')
       setSttDesired(false)
       void logEvent('stt.start_failed', { message: msg })
     }
@@ -302,47 +305,86 @@ export function Meeting() {
       sttRecRef.current = null
       currentUtteranceStartMsRef.current = null
     }
-  }, [session, sessionConfig, sttSupported, sttAllowedByRole, sttEnabledByConfig, sttDesired, sttRestartNonce])
+  }, [session, sessionConfig, sttMode, sttSupported, sttAllowedByRole, sttEnabledByConfig, sttDesired, sttRestartNonce])
 
-  function toggleStt() {
+  useEffect(() => {
     if (!session) return
+    if (sttMode !== 'server_per_client') return
 
-    if (!sttSupported) {
-      void logEvent('stt.unsupported', { ua: navigator.userAgent })
-      return
-    }
-    if (!sessionConfig) {
-      void logEvent('stt.config_missing', {})
-      return
-    }
-    if (!sttEnabledByConfig) {
-      void logEvent('stt.disabled_by_config', {})
-      return
-    }
-    if (!sttAllowedByRole) {
-      void logEvent('stt.disallowed_by_role', { role: session.role })
-      return
+    if (!sttDesired) return
+    if (!sessionConfig) return
+    if (!sttSupported || !sttEnabledByConfig || !sttAllowedByRole) return
+
+    let stopped = false
+    let restartTimer: ReturnType<typeof setTimeout> | null = null
+
+    const scheduleRestart = () => {
+      if (stopped || !sttDesiredRef.current) return
+      restartTimer = setTimeout(() => {
+        if (!sttDesiredRef.current) return
+        setSttRestartNonce((n) => n + 1)
+      }, 250)
     }
 
-    if (sttDesiredRef.current) {
-      currentUtteranceStartMsRef.current = null
+    void (async () => {
+      void logEvent('stt.start_requested', { mode: 'server_per_client' })
+
       try {
-        sttRecRef.current?.stop()
-      } catch {
-        // ignore
+        const stop = await startServerStt(
+          {
+            roomName: session.roomName,
+            participantId: session.participantId,
+            role: session.role,
+            condition: session.condition,
+            sttLanguage: sessionConfig.sttLanguage || 'en-US',
+            sttSendInterim: !!sessionConfig.sttSendInterim,
+          },
+          {
+            onReady: () => {
+              if (stopped) return
+              void logEvent('stt.started', { mode: 'server_per_client' })
+            },
+            onError: (message) => {
+              if (stopped) return
+              void logEvent('stt.error', { error: message, mode: 'server_per_client' })
+            },
+            onClose: () => {
+              serverSttStopRef.current = null
+              if (stopped) return
+              scheduleRestart()
+            },
+          },
+        )
+
+        if (stopped) {
+          stop()
+          return
+        }
+
+        serverSttStopRef.current = stop
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to start server STT'
+        setSttDesired(false)
+        void logEvent('stt.start_failed', { message: msg, mode: 'server_per_client' })
       }
-      sttRecRef.current = null
-      setSttRunState('off')
-      setSttDesired(false)
-      void logEvent('stt.stopped', {})
-    } else {
-      autoStartAttemptedRef.current = true
-      setSttDesired(true)
-      // The effect above will create and start recognition.
-      void logEvent('stt.enabled', {})
-      setSttRunState('starting')
+    })()
+
+    return () => {
+      stopped = true
+      if (restartTimer) clearTimeout(restartTimer)
+      serverSttStopRef.current?.()
+      serverSttStopRef.current = null
     }
-  }
+  }, [
+    session,
+    sessionConfig,
+    sttMode,
+    sttSupported,
+    sttAllowedByRole,
+    sttEnabledByConfig,
+    sttDesired,
+    sttRestartNonce,
+  ])
 
   if (!session) return <Navigate to="/" replace />
   if (isProxyRole(session.role)) {
@@ -360,32 +402,6 @@ export function Meeting() {
           {eventStatus === 'error' && <span className="pill warn">logging offline</span>}
           {configStatus === 'loading' && <span className="pill">config loading…</span>}
           {configStatus === 'error' && <span className="pill warn">config error</span>}
-          {sessionConfig && sttEnabledByConfig ? (
-            <>
-              {!sttSupported && <span className="pill warn">stt unsupported</span>}
-              {sttSupported && sttAllowedByRole && (
-                <span className="pill">
-                  stt {sttRunState === 'listening' ? 'on' : 'off'}
-                  {sttRunState === 'starting' ? '…' : ''}
-                </span>
-              )}
-              {sttPostStatus === 'error' && <span className="pill warn">transcripts offline</span>}
-              {sttAllowedByRole ? (
-                <button
-                  className="button secondary"
-                  onClick={toggleStt}
-                  disabled={!sttSupported || sttRunState === 'starting'}
-                  title={sttLastError ?? undefined}
-                >
-                  {sttRunState === 'listening' ? 'Stop STT' : sttRequireUserClick ? 'Start STT' : 'STT'}
-                </button>
-              ) : (
-                <span className="pill">stt disabled for role</span>
-              )}
-            </>
-          ) : (
-            sessionConfig && <span className="pill">stt disabled by config</span>
-          )}
           <button
             className="button secondary"
             onClick={() => {
@@ -407,16 +423,6 @@ export function Meeting() {
             void logEvent(`jitsi.${name}`, payload)
           }}
         />
-        {liveCaptions.length > 0 && (
-          <div className="meetingCaptions" aria-live="polite">
-            <div className="meetingCaptionsTitle">Live transcript</div>
-            {liveCaptions.map((line) => (
-              <p key={line.id} className="meetingCaptionLine">
-                <HighlightedText text={line.text} />
-              </p>
-            ))}
-          </div>
-        )}
       </main>
     </div>
   )
