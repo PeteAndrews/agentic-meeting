@@ -2,7 +2,7 @@
 
 Human–agent meeting prototype: participants join a Jitsi room while **Echo** (an embodied agent) can listen, think, and speak. A separate **Agent Console** lets a proxy user (User C) calibrate Echo and approve answers.
 
-This README is the colleague onboarding guide: architecture, one-time setup, how to run each piece, and how **ngrok** fits in.
+
 
 ---
 
